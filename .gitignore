@@ -1,0 +1,39 @@
+# 运行数据与挂载点
+/data/
+/strm/
+/mounts/
+/output/data/
+/output/strm/
+/output/litepan-data/
+*.db
+*.db-wal
+*.db-shm
+
+# 构建产物
+/litepan
+/dist/
+*.out
+*.test
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
+
+# 前端依赖与本地缓存
+web/node_modules/
+web/*.tsbuildinfo
+
+# Docker 镜像导出（NAS load 用）
+dist/*.tar
+dist/*.tar.gz
+
+# 本地修改备份（不入库）
+.bak/
+**/*.bak
+**/*.bak-*
+
+# 环境与密钥
+.env
+.env.*
+drivers/115/

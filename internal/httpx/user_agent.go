@@ -1,0 +1,12 @@
+package httpx
+
+const (
+	// 保持与前端 web/src/version.ts 的品牌版本一致。
+	AppName = "LitePan"
+
+	// AppVersion 是程序品牌版本，用于默认程序 User-Agent。
+	AppVersion = "v0.5.6-Beta"
+
+	// DefaultUserAgent 用于未被驱动平台强制指定时的默认程序 UA。
+	DefaultUserAgent = AppName + "/" + AppVersion
+)

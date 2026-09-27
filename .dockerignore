@@ -1,0 +1,33 @@
+# 运行数据与挂载点
+data
+strm
+mounts
+*.db
+*.db-wal
+*.db-shm
+
+# 本地构建产物；前端内嵌资源由 Docker web 阶段重新生成
+litepan
+dist
+internal/api/web
+*.tar
+*.tar.gz
+
+# 依赖、缓存与本地备份
+.bak
+**/.bak
+web/node_modules
+web/*.tsbuildinfo
+
+# 版本库、IDE、系统文件与本地密钥
+.git
+.idea
+.vscode
+.DS_Store
+.env
+.env.*
+
+# 构建不需要的测试与文档
+**/*_test.go
+*.md
+docs

@@ -1,0 +1,61 @@
+.admin-tabbed-page {
+  padding-bottom: 24px;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.modal-form__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .modal-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-card__loading {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 16px 0 20px;
+}
+
+/* 仪表带中列的行内小操作（刷新 / 清理），不额外占一行。 */
+.mid-act {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.mid-act:not(:disabled):hover {
+  color: var(--brand);
+  border-color: var(--border);
+  background: var(--surface);
+}
+.mid-act--danger:not(:disabled):hover {
+  color: var(--danger);
+}
+.mid-act:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
