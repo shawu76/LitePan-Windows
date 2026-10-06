@@ -20,6 +20,7 @@
 - **原项目**：[Ponphil/LitePan](https://github.com/Ponphil/LitePan)（Go 语言编写，多网盘聚合挂载/管理工具，官方仅提供 Docker 部署）
 - **移植内容**：将 LitePan 编译为 Windows 原生可执行程序，并修复 Windows 平台下的路径与存储访问问题（跨盘浏览等）
 - **致谢**：感谢 [@Ponphil](https://github.com/Ponphil) 开发出如此优秀的多网盘聚合工具，本项目的一切功能与设计均源自上游
+- **移植协助**：Windows 移植与发布由 [Marvis](https://github.com/Marvis)（AI 助手）协助完成
 
 > [!IMPORTANT]
 > 请前往上游仓库 [Ponphil/LitePan](https://github.com/Ponphil/LitePan) 为原作者点个 Star，支持原创。
