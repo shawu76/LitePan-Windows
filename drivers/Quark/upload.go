@@ -460,7 +460,7 @@ func (d *Driver) completeUpload(ctx context.Context, pre *uploadPreData, etags [
 	req.Header.Set("x-oss-date", timeStr)
 	req.Header.Set("x-oss-user-agent", ossUserAgent)
 
-	resp, err := d.client.Do(req)
+	resp, err := d.uploadClient.Do(req)
 	if err != nil {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}

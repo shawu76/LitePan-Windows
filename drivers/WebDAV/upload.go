@@ -44,7 +44,7 @@ func (d *Driver) UploadLocalFile(ctx context.Context, req driver.LocalUploadRequ
 	targetName = resolvedName
 	targetPath := d.childPath(parentID, targetName)
 
-	c, err := d.ensureClient()
+	c, err := d.ensureUploadClient()
 	if err != nil {
 		return nil, err
 	}

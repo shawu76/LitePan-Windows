@@ -139,8 +139,7 @@ func TestCloud189RefreshResponseAndCooldown(t *testing.T) {
 	}
 }
 
-// 会话初始化失败时只对"认证失效"回退换 Token；网络/上游错误（503 等）必须
-// 直接上报，不得多换一次 Token、不得追加一次会话请求（约定：非认证错误不触发认证刷新）。
+// 会话初始化仅在认证失效时刷新 Token，网络及服务端错误直接返回。
 func TestCloud189InitSessionFailureTriggersTokenRefreshOnlyOnAuthExpiry(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -151,6 +150,7 @@ func TestCloud189InitSessionFailureTriggersTokenRefreshOnlyOnAuthExpiry(t *testi
 	}{
 		{"503会话错误不换Token", http.StatusServiceUnavailable, 0, 1, false},
 		{"401会话失效换一次Token", http.StatusUnauthorized, 1, 2, true},
+		{"400会话失效换一次Token", http.StatusBadRequest, 1, 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var refreshes, sessions atomic.Int32
@@ -168,7 +168,7 @@ func TestCloud189InitSessionFailureTriggersTokenRefreshOnlyOnAuthExpiry(t *testi
 					// 仅首次按场景返回错误；换 Token 后的会话请求应成功。
 					if n == 1 && tc.sessionStatus != http.StatusOK {
 						w.WriteHeader(tc.sessionStatus)
-						_, _ = io.WriteString(w, `{"message":"session invalid"}`)
+						_, _ = io.WriteString(w, `{"errorCode":"UserInvalidOpenToken","errorMsg":"unifyAccountInfo is null"}`)
 						return
 					}
 					_, _ = io.WriteString(w, `{"res_code":0,"sessionKey":"mock-session","sessionSecret":"mock-session-secret"}`)
@@ -208,6 +208,145 @@ func TestCloud189InitSessionFailureTriggersTokenRefreshOnlyOnAuthExpiry(t *testi
 			}
 			if got := sessions.Load(); got != tc.wantSessions {
 				t.Fatalf("会话请求次数=%d，期望 %d", got, tc.wantSessions)
+			}
+		})
+	}
+}
+
+func TestCloud189ExpiredSessionRecovery(t *testing.T) {
+	const expired = `{"errorCode":"InvalidSessionKey","errorMsg":"userSessionBO is null or fail to get sessionsecret by sessionkey","success":null}`
+	for _, tc := range []struct {
+		name, space, endpoint string
+		status                int
+		body                  string
+		code                  domain.ErrorCode
+		concurrency           int
+	}{
+		{"个人云列目录", "personal", "/listFiles.action", 400, expired, "", 1},
+		{"家庭云并发列目录", "family", "/family/file/listFiles.action", 400, expired, "", 6},
+		{"家庭云表单提交", "family", "/batch/createBatchTask.action", 400, expired, "", 1},
+		{"家庭云任务查询使用个人会话", "family", "/batch/checkBatchTask.action", 400, expired, "", 1},
+		{"普通400不刷新", "family", "/family/file/listFiles.action", 400, `{"errorCode":"InvalidArgument"}`, domain.CodeDriverError, 1},
+		{"403不刷新", "family", "/family/file/listFiles.action", 403, expired, domain.CodePermissionDenied, 1},
+		{"429不刷新", "family", "/family/file/listFiles.action", 429, expired, domain.CodeRateLimited, 1},
+		{"503不刷新", "family", "/family/file/listFiles.action", 503, expired, domain.CodeDriverError, 1},
+		{"表单403不刷新", "family", "/batch/createBatchTask.action", 403, expired, domain.CodePermissionDenied, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sessions, refreshes, rejected atomic.Int32
+			var armed atomic.Bool
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/oauth2/refreshToken.do" {
+					refreshes.Add(1)
+					if r.FormValue("refreshToken") != "old-refresh" {
+						t.Error("未使用原刷新凭据")
+					}
+					_, _ = io.WriteString(w, `{"accessToken":"new-access","refreshToken":"new-refresh"}`)
+					return
+				}
+				if r.URL.Path == "/getSessionForPC.action" {
+					n := sessions.Add(1)
+					_, _ = fmt.Fprintf(w, `{"sessionKey":"personal-%d","sessionSecret":"secret","familySessionKey":"family-%d","familySessionSecret":"secret"}`, n, n)
+					return
+				}
+				prefix := tc.space
+				if r.URL.Path == "/batch/checkBatchTask.action" {
+					prefix = "personal"
+				}
+				key := r.Header.Get("SessionKey")
+				if !strings.HasPrefix(key, prefix+"-") {
+					t.Errorf("%s 使用了错误的会话类型 %q", r.URL.Path, key)
+				}
+				if armed.Load() && r.URL.Path == tc.endpoint && key == prefix+"-1" {
+					rejected.Add(1)
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					return
+				}
+				switch r.URL.Path {
+				case "/family/manage/getFamilyList.action":
+					_, _ = io.WriteString(w, `{"familyInfoResp":[{"familyId":"123","useFlag":1}]}`)
+				case "/listFiles.action", "/family/file/listFiles.action":
+					_, _ = io.WriteString(w, `{"fileListAO":{"fileList":[{"id":"42","name":"测试.txt","size":100}]}}`)
+				case "/batch/createBatchTask.action":
+					_, _ = io.WriteString(w, `{"taskId":"mock-task"}`)
+				case "/batch/checkBatchTask.action":
+					_, _ = io.WriteString(w, `{"taskStatus":4,"failedCount":0}`)
+				default:
+					t.Errorf("意外请求路径：%s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			original := http.DefaultTransport
+			transport := original.(*http.Transport).Clone()
+			transport.Proxy = nil
+			transport.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+			transport.TLSClientConfig.ServerName = "example.com"
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if addr != "open.e.189.cn:443" && addr != "api.cloud.189.cn:443" {
+					return nil, fmt.Errorf("禁止模拟测试访问地址 %s", addr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+			}
+			http.DefaultTransport = transport
+			defer func() { http.DefaultTransport = original; transport.CloseIdleConnections() }()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			accounts := &fakeAccountRepo{accounts: map[int64]*domain.Account{1: {
+				ID: 1, DriverType: "189_cloud", IsActive: true, Config: fmt.Sprintf(`{"space_type":%q}`, tc.space),
+			}}}
+			repo := &fakeAuthRepo{states: map[int64]*domain.AuthState{1: {
+				AccountID: 1, Status: domain.AuthActive, AccessToken: "old-access", RefreshToken: "old-refresh",
+			}}}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			mgr := driver.NewManager(accounts, repo, nil, log)
+			defer mgr.Close(ctx)
+			NewService(Options{Accounts: accounts, AuthStates: repo, Drivers: mgr, Log: log})
+			d, err := mgr.Get(ctx, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// 先正常列目录，再模拟会话到期；所有写操作仅发往本机 mock。
+			if _, err := d.ListFiles(ctx, "0"); err != nil {
+				t.Fatal(err)
+			}
+			armed.Store(true)
+			results := make(chan error, tc.concurrency)
+			for i := 0; i < tc.concurrency; i++ {
+				go func() {
+					if strings.HasPrefix(tc.endpoint, "/batch/") {
+						results <- d.(driver.Copier).CopyFiles(ctx, []string{"42"}, "456")
+						return
+					}
+					items, err := d.ListFiles(ctx, "0")
+					if err == nil && (len(items) != 1 || items[0].ID != "42") {
+						err = fmt.Errorf("恢复后文件列表不正确：%v", items)
+					}
+					results <- err
+				}()
+			}
+			for i := 0; i < tc.concurrency; i++ {
+				if err := <-results; tc.code == "" {
+					if err != nil {
+						t.Error(err)
+					}
+				} else if ae, ok := domain.AsAppError(err); !ok || ae.Code != tc.code {
+					t.Errorf("错误=%v，期望 %s", err, tc.code)
+				}
+			}
+			st, err := repo.Get(ctx, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRefreshes := int32(0)
+			wantToken := "old-refresh"
+			if tc.code == "" {
+				wantRefreshes, wantToken = 1, "new-refresh"
+			}
+			if rejected.Load() == 0 || refreshes.Load() != wantRefreshes || sessions.Load() != 1+wantRefreshes || st.RefreshToken != wantToken || st.Status != domain.AuthActive {
+				t.Fatalf("恢复/刷新合并不符合预期：拒绝%d次，刷新%d次，会话%d次，状态%s", rejected.Load(), refreshes.Load(), sessions.Load(), st.Status)
 			}
 		})
 	}

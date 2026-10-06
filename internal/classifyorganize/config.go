@@ -114,6 +114,67 @@ func (s *Service) Config() Config {
 	return cfg
 }
 
+// RootDirectories 返回当前模板在指定媒体类型下可能产生的一级目录。
+// 这里只暴露路径语义，避免自动联动重复解析分类配置。
+func (s *Service) RootDirectories(mediaType string) []string {
+	if !s.Available() {
+		return nil
+	}
+	cfg := s.Config()
+	tpl, ok := findTemplate(cfg, cfg.SelectedTemplate)
+	if !ok {
+		return nil
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType != "movie" && mediaType != "tv" {
+		mediaType = "auto"
+	}
+	out := make([]string, 0, len(tpl.Rules))
+	seen := make(map[string]struct{}, len(tpl.Rules))
+	for _, rule := range tpl.Rules {
+		if !rootRuleAllowsMediaType(rule, mediaType) {
+			continue
+		}
+		name := strings.TrimSpace(rule.Name)
+		key := strings.ToLower(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func rootRuleAllowsMediaType(rule Rule, mediaType string) bool {
+	if mediaType == "auto" {
+		return true
+	}
+	conditions, err := parseExpression(rule.Condition)
+	if err != nil {
+		return true
+	}
+	for _, condition := range conditions {
+		if condition.Field != "type" {
+			continue
+		}
+		matched := false
+		for _, value := range condition.Values {
+			if strings.EqualFold(value, mediaType) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) Update(ctx context.Context, in Config) (Config, error) {
 	if s == nil || s.settings == nil {
 		return Config{}, domain.Errorf(domain.CodeInternal, "分类整理配置服务未就绪")

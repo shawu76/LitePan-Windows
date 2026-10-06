@@ -143,7 +143,7 @@ func (d *Driver) uploadStream(ctx context.Context, targetPath string, size int64
 	}
 	req.ContentLength = size
 
-	resp, err := d.client.Do(req)
+	resp, err := d.uploadClient.Do(req)
 	if err != nil {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}

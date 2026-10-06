@@ -281,6 +281,8 @@ export const useBrowserStore = defineStore("browser", () => {
     crumbs: Crumb[],
     opts?: LoadFilesOptions,
   ) {
+    const previous = breadcrumb.value;
+    const sameAccount = currentAccountId.value === accountId;
     if (!accounts.value.some((a) => a.id === accountId)) {
       await ensureValidCurrentAccount();
       if (currentAccountId.value === null) return;
@@ -292,7 +294,9 @@ export const useBrowserStore = defineStore("browser", () => {
       }
     }
     breadcrumb.value = crumbs.length ? cloneCrumbs(crumbs) : [ROOT];
-    await loadFiles(opts);
+    if (await loadFiles(opts)) return;
+    // 同一账号内跳转失败就退回原路径；跨账号时账号已经切走，不回滚
+    if (sameAccount) breadcrumb.value = previous;
   }
 
   async function fetchCacheHitRate() {
@@ -304,9 +308,10 @@ export const useBrowserStore = defineStore("browser", () => {
     }
   }
 
-  async function loadFiles(opts?: LoadFilesOptions) {
+  // 返回是否加载成功：进入目录失败时调用方要能把面包屑回滚，避免重复点击不停叠加
+  async function loadFiles(opts?: LoadFilesOptions): Promise<boolean> {
     const accountId = currentAccountId.value;
-    if (accountId === null) return;
+    if (accountId === null) return false;
     const parentId = currentParentId.value;
     const requestSeq = ++loadFilesSeq;
     const silent = opts?.silent ?? false;
@@ -322,17 +327,20 @@ export const useBrowserStore = defineStore("browser", () => {
         forceRefresh: opts?.forceRefresh,
         path: crumbsPath || undefined,
       });
-      if (isStaleFileListRequest(requestSeq, accountId, parentId)) return;
+      if (isStaleFileListRequest(requestSeq, accountId, parentId)) return true;
       files.value = res.items;
       filesResortTick.value += 1;
       responseTime.value = `${Math.round(performance.now() - started)}ms`;
       void fetchCacheHitRate();
+      return true;
     } catch (e) {
-      if (isStaleFileListRequest(requestSeq, accountId, parentId)) return;
+      // 已被更新的请求取代：状态交给新请求，不算这次失败
+      if (isStaleFileListRequest(requestSeq, accountId, parentId)) return true;
       if (!silent) files.value = [];
       error.value = getApiErrorMessage(e, "加载失败");
       responseTime.value = "-";
       if (!silent) toast.error(error.value);
+      return false;
     } finally {
       if (!silent && requestSeq === loadFilesSeq) loading.value = false;
     }
@@ -399,8 +407,11 @@ export const useBrowserStore = defineStore("browser", () => {
   }
 
   async function enterFolder(folder: FileItem) {
-    breadcrumb.value.push({ id: folder.id, name: folder.name });
-    await loadFiles();
+    const previous = breadcrumb.value;
+    breadcrumb.value = [...previous, { id: folder.id, name: folder.name }];
+    if (await loadFiles()) return;
+    // 进不去就退回原来那一层：否则每点一次面包屑就多叠一级假路径
+    breadcrumb.value = previous;
   }
 
   async function goTo(index: number) {

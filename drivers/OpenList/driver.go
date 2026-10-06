@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"litepan/internal/domain"
 	"litepan/internal/driver"
@@ -15,8 +16,9 @@ import (
 // Driver 是 OpenList 挂载驱动实例；令牌失效时可凭账号密码自动重新登录。
 type Driver struct {
 	driver.AuthRefreshControl
-	add    Addition
-	client *http.Client
+	add          Addition
+	client       *http.Client
+	uploadClient *http.Client
 
 	intervalGate driver.RequestIntervalGate
 	persist      driver.AuthPersistFunc
@@ -70,7 +72,9 @@ func (d *Driver) Init(ctx context.Context) error {
 
 func (d *Driver) Drop(context.Context) error {
 	httpx.CloseClient(d.client)
+	httpx.CloseClient(d.uploadClient)
 	d.client = nil
+	d.uploadClient = nil
 	return nil
 }
 
@@ -116,6 +120,9 @@ func (d *Driver) currentToken() string {
 func (d *Driver) ensureClient() {
 	if d.client == nil {
 		d.client = httpx.NewClient(httpx.ClientOptions{})
+	}
+	if d.uploadClient == nil {
+		d.uploadClient = httpx.NewUploadClient(d.client, 60*time.Second, config.UploadUseHTTP2)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"litepan/internal/domain"
 	"litepan/internal/driver"
 	"litepan/internal/file"
+	"litepan/internal/mediaorganize/classification"
 	"litepan/internal/mediaorganize/rules"
 	"litepan/internal/mediaorganize/tmdb"
 	"litepan/internal/settings"
@@ -37,8 +38,9 @@ type Service struct {
 	dataDir  string
 	log      *slog.Logger
 
-	planner  PlannerBuilder
-	executor ExecutorApplier
+	planner        PlannerBuilder
+	executor       ExecutorApplier
+	classification classification.RootDirectoryProvider
 
 	mu              sync.Mutex
 	taskLogs        map[string][]LogEntry
@@ -51,13 +53,14 @@ type Service struct {
 }
 
 type ServiceOptions struct {
-	Repo     domain.MediaOrganizeTaskRepository
-	Files    *file.Service
-	Settings *settings.Service
-	DataDir  string
-	Log      *slog.Logger
-	Planner  PlannerBuilder
-	Executor ExecutorApplier
+	Repo           domain.MediaOrganizeTaskRepository
+	Files          *file.Service
+	Settings       *settings.Service
+	DataDir        string
+	Log            *slog.Logger
+	Planner        PlannerBuilder
+	Executor       ExecutorApplier
+	Classification classification.RootDirectoryProvider
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -81,6 +84,7 @@ func NewService(opts ServiceOptions) *Service {
 		log:             log,
 		planner:         p,
 		executor:        e,
+		classification:  opts.Classification,
 		taskLogs:        make(map[string][]LogEntry),
 		taskProgress:    make(map[string]map[string]any),
 		running:         make(map[string]struct{}),

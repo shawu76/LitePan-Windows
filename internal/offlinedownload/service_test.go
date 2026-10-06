@@ -34,6 +34,178 @@ type offlineTestDriver struct {
 	deleteCalls []offlineDeleteCall
 }
 
+type nativePollTestDriver struct {
+	offlineTestDriver
+	refresh func(context.Context, []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error)
+}
+
+func (d *nativePollTestDriver) RefreshOfflineTasks(ctx context.Context, refs []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error) {
+	return d.refresh(ctx, refs)
+}
+
+func TestNativePollResumesWithoutBrowserAndDoesNotRepeatCompletion(t *testing.T) {
+	repo := newOfflineTaskRepo()
+	bus := eventbus.New(nil)
+	defer bus.Close(context.Background())
+	events := make(chan eventbus.OfflineDownloadCompleted, 4)
+	eventbus.Subscribe(bus, func(_ context.Context, e eventbus.OfflineDownloadCompleted) { events <- e })
+	calls := make(chan int, 4)
+	drv := &nativePollTestDriver{refresh: func(_ context.Context, refs []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error) {
+		calls <- len(refs)
+		return []driver.OfflineTaskUpdate{{InfoHash: "native", Status: driver.OfflineStatusSuccess, Progress: 100}}, nil
+	}}
+	opts := Options{Exec: driverexec.New(offlineTestProvider{drv: drv}, nil), Repo: repo, Bus: bus, DataDir: t.TempDir()}
+	New(opts).putTask(&Task{TaskID: "restored", AccountID: 7, InfoHash: "native", Status: driver.OfflineStatusPending, TargetParentID: "movies"})
+	svc := New(opts)
+	svc.Start(context.Background())
+	select {
+	case e := <-events:
+		if e.TaskID != "restored" || e.TargetParentID != "movies" {
+			t.Fatalf("完成事件不正确: %#v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未打开页面时没有触发完成事件")
+	}
+	if err := svc.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := <-calls; n != 1 {
+		t.Fatalf("查询任务数: %d", n)
+	}
+	restarted := New(opts)
+	restarted.Start(context.Background())
+	if err := restarted.Refresh(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 || len(calls) != 0 {
+		t.Fatal("成功任务重启后重复查询或发布事件")
+	}
+}
+
+func TestNativePollCoalescesRequestsAndMissingTaskStaysPending(t *testing.T) {
+	entered, release := make(chan []driver.OfflineTaskRef, 4), make(chan struct{})
+	drv := &nativePollTestDriver{refresh: func(ctx context.Context, refs []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error) {
+		entered <- refs
+		select {
+		case <-release:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}
+	svc := New(Options{Exec: driverexec.New(offlineTestProvider{drv: drv}, nil), DataDir: t.TempDir()})
+	svc.putTask(&Task{TaskID: "a", AccountID: 7, InfoHash: "a", Status: driver.OfflineStatusPending})
+	svc.putTask(&Task{TaskID: "b", AccountID: 7, InfoHash: "b", Status: driver.OfflineStatusPending})
+	svc.putTask(&Task{TaskID: "duplicate", AccountID: 7, InfoHash: "b", Status: driver.OfflineStatusPending})
+	svc.putTask(&Task{TaskID: "builtin", AccountID: 7, ProviderKind: ProviderBuiltin, InfoHash: "c", Status: driver.OfflineStatusPending})
+	done := make(chan error, 1)
+	go func() { done <- svc.Refresh(context.Background(), 7, false) }()
+	if refs := <-entered; len(refs) != 2 {
+		t.Fatalf("未合并同账号任务或混入内置任务: %#v", refs)
+	}
+	if err := svc.Refresh(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Refresh(context.Background(), 7, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(entered) != 0 {
+		t.Fatal("并发/页面刷新绕过了节流")
+	}
+	for _, task := range svc.tasks {
+		if task.Status != driver.OfflineStatusPending {
+			t.Fatal("缺失任务被误判为完成")
+		}
+	}
+}
+
+func TestNativePollBackoff(t *testing.T) {
+	delay := time.Duration(0)
+	for _, want := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute} {
+		delay = nativePollDelay(delay, false, nil)
+		if delay != want {
+			t.Fatalf("退避=%v, 期望=%v", delay, want)
+		}
+	}
+	if got := nativePollDelay(delay, true, nil); got != nativePollMinInterval {
+		t.Fatalf("有进展时未恢复短间隔: %v", got)
+	}
+	for _, tc := range []struct {
+		code domain.ErrorCode
+		want time.Duration
+	}{
+		{domain.CodeRateLimited, 5 * time.Minute}, {domain.CodeAuthExpired, 15 * time.Minute},
+		{domain.CodePermissionDenied, 15 * time.Minute},
+	} {
+		if got := nativePollDelay(0, false, domain.Errorf(tc.code, "测试")); got != tc.want {
+			t.Fatalf("%s 退避=%v", tc.code, got)
+		}
+	}
+}
+
+func TestNativePollErrorCooldownCannotBeBypassedByPage(t *testing.T) {
+	calls := 0
+	drv := &nativePollTestDriver{refresh: func(context.Context, []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error) {
+		calls++
+		return nil, domain.Errorf(domain.CodeRateLimited, "限流")
+	}}
+	svc := New(Options{Exec: driverexec.New(offlineTestProvider{drv: drv}, nil), DataDir: t.TempDir()})
+	svc.putTask(&Task{TaskID: "a", AccountID: 7, InfoHash: "a", Status: driver.OfflineStatusPending})
+	if err := svc.Refresh(context.Background(), 7, false); err == nil {
+		t.Fatal("应返回限流错误")
+	}
+	svc.mu.Lock()
+	svc.nativePolls[7].lastAttempt = time.Now().Add(-time.Minute)
+	svc.mu.Unlock()
+	svc.putTask(&Task{TaskID: "b", AccountID: 7, InfoHash: "b", Status: driver.OfflineStatusPending})
+	if err := svc.Refresh(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("手动刷新或新增任务绕过限流冷却")
+	}
+	if got := svc.nativePolls[7].interval; got != 5*time.Minute {
+		t.Fatalf("限流冷却被缩短: %v", got)
+	}
+}
+
+func TestNativePollWakesForNewTaskAndStopsInFlightRequest(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	drv := &nativePollTestDriver{refresh: func(ctx context.Context, _ []driver.OfflineTaskRef) ([]driver.OfflineTaskUpdate, error) {
+		entered <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	svc := New(Options{Exec: driverexec.New(offlineTestProvider{drv: drv}, nil), DataDir: t.TempDir()})
+	svc.Start(context.Background())
+	defer func() {
+		if err := svc.Stop(context.Background()); err != nil {
+			t.Errorf("停止离线下载服务失败: %v", err)
+		}
+	}()
+	svc.putTask(&Task{TaskID: "new", AccountID: 7, InfoHash: "new", Status: driver.OfflineStatusPending})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("新任务未唤醒后台检查")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := svc.Stop(ctx); err != nil {
+		t.Fatalf("请求未随服务停止取消: %v", err)
+	}
+}
+
 type offlineLocalUploadDriver struct{ offlineTestDriver }
 
 func (*offlineLocalUploadDriver) UploadLocalFile(_ context.Context, req driver.LocalUploadRequest) (*driver.LocalUploadResult, error) {

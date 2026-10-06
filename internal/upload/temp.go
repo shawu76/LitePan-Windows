@@ -100,6 +100,10 @@ func (m *Manager) activeTempPaths() map[string]struct{} {
 			continue
 		}
 		active[filepath.Clean(st.localPath)] = struct{}{}
+		if st.SourceType == SourceTypeCrossTransfer {
+			active[filepath.Clean(st.localPath+".download")] = struct{}{}
+			active[filepath.Clean(st.localPath+".download.tmp")] = struct{}{}
+		}
 	}
 	m.mu.Unlock()
 	if m.tempRegistry != nil {

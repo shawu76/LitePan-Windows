@@ -433,14 +433,6 @@ func (k groupKey) seasonPtr() *int {
 	return &v
 }
 
-func (k groupKey) episodePtr() *int {
-	if !k.hasEpisode {
-		return nil
-	}
-	v := k.episode
-	return &v
-}
-
 func (p *Planner) computeAlignDefaults(groups map[groupKey][]batchEntry) map[groupKey]map[bucketKey]map[string]any {
 	out := map[groupKey]map[bucketKey]map[string]any{}
 	for key, items := range groups {

@@ -38,6 +38,10 @@ import AppModal from "@/components/base/AppModal.vue";
 import AppInput from "@/components/base/AppInput.vue";
 import TaskPanel from "@/components/upload/TaskPanel.vue";
 import OfflineDownloadModal from "./OfflineDownloadModal.vue";
+import ShareCreateModal from "./ShareCreateModal.vue";
+import ShareManageModal from "./ShareManageModal.vue";
+import { cloudShareApi } from "@/api/cloudShare";
+import type { CloudShareCapabilities } from "@/types/cloud-share";
 
 type FocusableInput = {
   focus: () => void;
@@ -92,6 +96,10 @@ const nameAlignIncludeSuspects = ref(true);
 const nameAlignApplyTotal = ref(0);
 const nameAlignApplyProgress = ref(0);
 const activePreview = ref<ActiveFilePreview | null>(null);
+const shareCapability = ref<CloudShareCapabilities | null>(null);
+const shareCreateOpen = ref(false);
+const shareManageOpen = ref(false);
+const shareFiles = ref<FileItem[]>([]);
 let nameAlignApplyTimer: number | undefined;
 
 // 悬浮账号列表与简约模式不冲突：简约模式下左侧仍保留悬浮图标，账号下拉选择则不渲染。
@@ -148,7 +156,9 @@ const fileActions = useFileActions({
   removeFilesLocally: (ids) => store.removeFilesLocally(ids),
   renameFileLocally: (fileId, newName) => store.renameFileLocally(fileId, newName),
   addFolderLocally: (folder) => store.addFolderLocally(folder),
-  reloadFiles: (opts) => store.loadFiles({ ...opts, silent: true }),
+  reloadFiles: async (opts) => {
+    await store.loadFiles({ ...opts, silent: true });
+  },
 });
 
 const coverExtractEnabled = ref(false);
@@ -171,7 +181,9 @@ async function sendToCoverExtract(file: FileItem) {
 const offline = useOfflineDownloads({
   selectedAccountId: currentAccountId,
   currentParentId,
-  refreshFiles: () => store.loadFiles({ forceRefresh: true, silent: true }),
+  refreshFiles: async () => {
+    await store.loadFiles({ forceRefresh: true, silent: true });
+  },
   openDirectory: (accountId, crumbs, opts) => store.openDirectory(accountId, crumbs, opts),
 });
 const uploadApi = useUploadTasks({
@@ -187,9 +199,12 @@ const uploadApi = useUploadTasks({
   removeFilesLocally: (ids) => store.removeFilesLocally(ids),
   markDeletingFiles: (rowKeys) => fileActions.markExternalDeleteRows(rowKeys),
   clearDeletingFiles: (rowKeys) => fileActions.clearExternalDeleteRows(rowKeys),
-  refreshFiles: (force?: boolean) =>
-    store.loadFiles({ forceRefresh: Boolean(force), silent: true }),
-  loadFiles: (opts) => store.loadFiles(opts),
+  refreshFiles: async (force?: boolean) => {
+    await store.loadFiles({ forceRefresh: Boolean(force), silent: true });
+  },
+  loadFiles: async (opts) => {
+    await store.loadFiles(opts);
+  },
   openDirectory: (accountId, crumbs, opts) => store.openDirectory(accountId, crumbs, opts),
   selectAccount: (account: Account) => store.selectAccount(account.id),
   getRootId,
@@ -227,6 +242,27 @@ const uploadTaskFailed = computed(
 const uploadTaskSuccess = computed(() =>
   uploadApi.displayUploadTasks.value.some((task) => task.status === "success") || offline.successfulTasks.value.length > 0,
 );
+
+async function loadShareCapability(accountId = currentAccountId.value) {
+  shareCapability.value = null;
+  if (!isAdmin.value || accountId == null) return;
+  try {
+    shareCapability.value = await cloudShareApi.capabilities(accountId);
+  } catch {
+    shareCapability.value = null;
+  }
+}
+
+function openCreateShare(nextFiles: FileItem[]) {
+  if (!shareCapability.value?.supported || !nextFiles.length) return;
+  shareFiles.value = [...nextFiles];
+  shareCreateOpen.value = true;
+}
+
+function openShareManagement() {
+  if (!shareCapability.value?.supports_manage) return;
+  shareManageOpen.value = true;
+}
 const transferTaskCount = computed(() => {
   const active =
     uploadApi.activeUploadTasks.value.length +
@@ -873,6 +909,7 @@ watch([currentAccountId, breadcrumb], () => {
 
 watch([currentAccountId, isAdmin], ([, admin]) => {
   void offline.loadCapability(admin ? currentAccountId.value : null);
+  void loadShareCapability(admin ? currentAccountId.value : null);
 }, { immediate: true });
 
 watch(browseAccessMode, async (mode, prevMode) => {
@@ -1105,6 +1142,10 @@ homeFooterStatus.onOpenTaskPanel(openTaskPanel);
             :name-align-file="openNameAlign"
             :cover-extract-enabled="coverExtractEnabled"
             :cover-extract-file="sendToCoverExtract"
+            :share-supported="Boolean(shareCapability?.supported)"
+            :share-manage-supported="Boolean(shareCapability?.supports_manage)"
+            :create-share="openCreateShare"
+            :manage-shares="openShareManagement"
             :drag-active="dragMove.active"
             :active-drop-target-id="dragMove.targetId"
             :drag-unlocked-target-id="dragMove.unlockedTargetId"
@@ -1222,6 +1263,22 @@ homeFooterStatus.onOpenTaskPanel(openTaskPanel);
       :breadcrumb="breadcrumb"
       @close="offline.closeModal"
       @created="handleOfflineTasksCreated"
+    />
+
+    <ShareCreateModal
+      :open="shareCreateOpen"
+      :account-id="currentAccountId"
+      :files="shareFiles"
+      :capability="shareCapability"
+      @close="shareCreateOpen = false"
+    />
+
+    <ShareManageModal
+      :open="shareManageOpen"
+      :account-id="currentAccountId"
+      :account-name="selectedAccountName"
+      :capability="shareCapability"
+      @close="shareManageOpen = false"
     />
 
     <TaskPanel v-if="uploadTaskPanelOpen" :upload-api="uploadApi" :offline="offline" />

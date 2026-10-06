@@ -82,11 +82,14 @@ func (d *Driver) ResolveDownload(ctx context.Context, req driver.DownloadRequest
 		Headers:     headers,
 		ChunkSize:   downloadPartSize,
 		Concurrency: downloadConcurrency,
+		// 跨盘传输使用大分片，降低长时下载的请求频率和换链压力。
+		TransferChunkSize: 128 << 20,
+		// redirect 与 proxy 共用临时直链有效期。
+		Expiration: downloadLinkTTL,
 	}
 	if strings.EqualFold(strings.TrimSpace(d.add.DownloadMode), "proxy") {
 		info.Mode = domain.DownloadProxy
 		info.ForceProxy = true
-		info.Expiration = downloadLinkTTL
 	}
 	return info, nil
 }

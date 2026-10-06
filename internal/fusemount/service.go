@@ -551,7 +551,7 @@ func (s *Service) prepareMountPoint(ctx context.Context, id int64, mountPoint st
 	if err := reclaimMountPoint(mountPoint); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+	if err := ensureMountPointDir(mountPoint); err != nil {
 		return domain.Errorf(domain.CodeInternal, "创建挂载目录失败: %v", err)
 	}
 	return nil

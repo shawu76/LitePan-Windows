@@ -38,6 +38,7 @@ import AdminEnableToggle from "@/components/admin/AdminEnableToggle.vue";
 import AdminTableActionBtn from "@/components/admin/AdminTableActionBtn.vue";
 import AdminRowActions from "@/components/admin/AdminRowActions.vue";
 import FolderPickerModal from "@/components/file/FolderPickerModal.vue";
+import MountPointPickerModal from "@/components/admin/MountPointPickerModal.vue";
 import { useAccountPathLabel } from "@/composables/useAccountPathLabel";
 import { useAdminPageLoading } from "@/composables/useAdminLoadingBar";
 import { findDustTarget, useDustRemoval } from "@/composables/useDustRemoval";
@@ -121,11 +122,13 @@ const readCacheStats = reactive({
 
 const dialogOpen = ref(false);
 const pickerOpen = ref(false);
+const mountPickerOpen = ref(false);
 const showAdvanced = ref(false);
 const editingId = ref<number | null>(null);
 
 const form = reactive({
   name: "",
+  mount_point: "",
   account_id: 0,
   root_item_id: "",
   root_path: "",
@@ -295,6 +298,7 @@ function canDeleteMount(row: FuseMount) {
 function resetForm() {
   editingId.value = null;
   form.name = "";
+  form.mount_point = "";
   form.account_id = accounts.value[0]?.id ?? 0;
   form.root_item_id = "";
   form.root_path = "";
@@ -315,6 +319,7 @@ function openCreate() {
 function openEdit(row: FuseMount) {
   editingId.value = row.id ?? null;
   form.name = row.name;
+  form.mount_point = row.mount_point || "";
   form.account_id = row.account_id;
   form.root_item_id =
     (row.root_item_id || "").trim() ||
@@ -393,10 +398,18 @@ async function submitForm() {
     toast.error("请选择源目录");
     return;
   }
-  const mountPoint = mountPointForName(form.name);
+  const mountPoint = form.mount_point.trim() || mountPointForName(form.name);
   if (!mountPoint) {
-    toast.error("请填写挂载名称");
+    toast.error("请填写挂载名称或挂载点");
     return;
+  }
+  const mpUpper = mountPoint.toUpperCase();
+  if (/^[A-Z]:[\\/]?$/.test(mpUpper)) {
+    if (mpUpper.startsWith("C:")) {
+      toast.error("不能将系统盘 C: 作为挂载点，请换用其他盘符（如 Z:）");
+      return;
+    }
+    toast.info(`将以盘符 ${mpUpper} 挂载，若该盘符已被占用 WinFsp 会拒绝挂载`);
   }
   submitting.value = true;
   try {
@@ -523,6 +536,18 @@ function onFolderPicked(payload: {
   form.root_item_id = normalizeFuseRootItemId(payload.parentId);
   form.root_path = payload.path || "/";
   pickerOpen.value = false;
+}
+
+function onMountPointSelected(path: string) {
+  const upper = (path || "").trim().toUpperCase();
+  // 防御：即使选择器漏拦，盘符根 C: 仍不允许作为挂载点。
+  if (/^[A-Z]:[\\/]?$/.test(upper) && upper.startsWith("C:")) {
+    toast.error("不能将系统盘 C: 作为挂载点，请换用其他盘符（如 Z:）");
+    mountPickerOpen.value = false;
+    return;
+  }
+  form.mount_point = upper;
+  mountPickerOpen.value = false;
 }
 
 onMounted(async () => {
@@ -684,6 +709,31 @@ defineExpose({
           <AppInput v-model="form.name" :placeholder="namePlaceholder" />
         </FormField>
 
+        <FormField label="挂载点（可选）">
+          <InputActionField>
+            <AppInput
+              v-model="form.mount_point"
+              placeholder="留空自动使用挂载根目录下的同名目录；填盘符如 Z: 可直接挂载为该盘符"
+            />
+            <template #action>
+              <div class="fuse-mount-picker-actions">
+                <AppButton type="button" variant="secondary" @click="mountPickerOpen = true">
+                  选择
+                </AppButton>
+                <AppButton
+                  v-if="form.mount_point"
+                  type="button"
+                  variant="ghost"
+                  class="fuse-mount-picker-actions__clear"
+                  @click="form.mount_point = ''"
+                >
+                  清空
+                </AppButton>
+              </div>
+            </template>
+          </InputActionField>
+        </FormField>
+
         <FormField label="源目录">
           <AccountFolderField
             :display="sourceDirDisplay"
@@ -735,6 +785,13 @@ defineExpose({
       :accounts="accounts"
       @close="pickerOpen = false"
       @resolve="onFolderPicked"
+    />
+
+    <MountPointPickerModal
+      :open="mountPickerOpen"
+      :initial-value="form.mount_point"
+      @close="mountPickerOpen = false"
+      @select="onMountPointSelected"
     />
 
     <AdminSettingsDrawer
@@ -1076,6 +1133,17 @@ defineExpose({
   padding: 0;
   text-align: left;
   font-size: 13px;
+}
+
+.fuse-mount-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fuse-mount-picker-actions__clear {
+  color: var(--text-muted);
 }
 
 @media (max-width: 720px) {

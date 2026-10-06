@@ -29,6 +29,10 @@ func forceReleaseMountPoint(mountPoint string) error {
 	return nil
 }
 
+func ensureMountPointDir(mountPoint string) error {
+	return os.MkdirAll(filepath.Clean(mountPoint), 0o755)
+}
+
 func lazyUnmount(mountPoint string) error {
 	err := unix.Unmount(mountPoint, unix.MNT_DETACH)
 	if err == nil || isBenignUnmountErr(err) {

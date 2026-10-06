@@ -347,7 +347,6 @@ async function saveSettings() {
         <div v-if="selectedTemplate" class="cls-workspace">
           <!-- 左侧目录树 -->
           <aside class="cls-tree">
-            <div class="cls-tree__cap">分类目录</div>
             <div class="cls-tree__list">
               <template v-for="(rule, index) in selectedTemplate.rules" :key="`root-${index}`">
                 <div
@@ -578,7 +577,6 @@ async function saveSettings() {
 
 /* 左侧树 */
 .cls-tree { border-right: 1px solid var(--border); background: var(--surface-sunken); padding: 14px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.cls-tree__cap { font-size: 11px; color: var(--text-muted); letter-spacing: .06em; padding: 2px 6px 6px; }
 .cls-tree__list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 1px; padding-bottom: 10px; min-height: 0; }
 .cls-tree__empty { padding: 22px 8px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .cls-tree__add { margin-top: auto; width: 100%; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border2); background: transparent; color: var(--text-muted); font-size: 13px; cursor: pointer; transition: .12s; }

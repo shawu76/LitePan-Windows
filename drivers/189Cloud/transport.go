@@ -44,6 +44,8 @@ const (
 	downloadURLTTLSeconds   = 300
 	defaultUploadPartSize   = 10 * 1024 * 1024
 	qrCodeTimeoutSec        = 300
+	// 同步盘实际 ID 为 0，独立标识避免与公共层的根目录别名冲突。
+	syncRootID = "sync:0"
 )
 
 func (d *Driver) rootID() string {
@@ -78,6 +80,9 @@ func (d *Driver) isRootAlias(id string) bool {
 
 func (d *Driver) apiParentID(parentID string) string {
 	parent := d.normalizeParent(parentID)
+	if !d.isFamily() && parent == syncRootID {
+		return "0"
+	}
 	if d.isFamily() && d.isRootAlias(parent) {
 		return ""
 	}
@@ -207,7 +212,7 @@ func (d *Driver) rawJSON(ctx context.Context, method, rawURL string, query url.V
 	if err != nil {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}
-	if resp.StatusCode == http.StatusUnauthorized || (resp.StatusCode == http.StatusOK && is189AuthExpiredPayload(data)) {
+	if is189AuthExpiredResponse(resp.StatusCode, data) {
 		return domain.Errorf(domain.CodeAuthExpired, "天翼云盘认证会话已失效")
 	}
 	if resp.StatusCode == http.StatusForbidden {
@@ -241,7 +246,7 @@ func (d *Driver) rawForm(ctx context.Context, method, rawURL string, query url.V
 	if err != nil {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}
-	if resp.StatusCode == http.StatusUnauthorized || (resp.StatusCode == http.StatusOK && is189AuthExpiredPayload(data)) {
+	if is189AuthExpiredResponse(resp.StatusCode, data) {
 		return domain.Errorf(domain.CodeAuthExpired, "天翼云盘认证会话已失效")
 	}
 	if resp.StatusCode == http.StatusForbidden {
@@ -310,6 +315,12 @@ func parse189XMLResponse(data []byte, out any) error {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}
 	return nil
+}
+
+func is189AuthExpiredResponse(status int, data []byte) bool {
+	// 会话失效也可能返回 400；403、429 和服务端错误仍按原状态处理。
+	return status == http.StatusUnauthorized ||
+		((status == http.StatusOK || status == http.StatusBadRequest) && is189AuthExpiredPayload(data))
 }
 
 func is189AuthExpiredPayload(data []byte) bool {

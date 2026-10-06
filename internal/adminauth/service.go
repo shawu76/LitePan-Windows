@@ -68,6 +68,8 @@ type LoginResult struct {
 	IsAdmin              bool   `json:"is_admin"`
 	MustChangePassword   bool   `json:"must_change_password"`
 	PasswordChangeReason string `json:"password_change_reason,omitempty"`
+	TwoFactorRequired    bool   `json:"two_factor_required,omitempty"`
+	Challenge            string `json:"challenge,omitempty"`
 }
 
 type SystemConfig struct {
@@ -86,6 +88,7 @@ type SystemConfig struct {
 	LogRetentionDays           int     `json:"log_retention_days,omitempty"`
 	AuthActiveRefreshEnabled   bool    `json:"auth_active_refresh_enabled,omitempty"`
 	WebDAVEnabled              bool    `json:"webdav_enabled"`
+	TwoFactorEnabled           bool    `json:"two_factor_enabled"`
 }
 
 type WebDAVConfigRequest struct {
@@ -119,13 +122,22 @@ type Service struct {
 	resetIPCooldown sync.Map
 	resetLastAt     int64
 	resetMu         sync.Mutex
+	twoFactorMu     sync.Mutex
+	twoFactorTryMu  sync.Mutex
+	twoFactorTries  map[string]twoFactorAttempt
 }
 
 func New(configs domain.ConfigRepository, secret []byte, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{configs: configs, secret: secret, log: log, configValues: map[string]string{}}
+	return &Service{
+		configs:        configs,
+		secret:         secret,
+		log:            log,
+		configValues:   map[string]string{},
+		twoFactorTries: map[string]twoFactorAttempt{},
+	}
 }
 
 func (s *Service) serializer() *security.TimedSerializer {
@@ -232,7 +244,10 @@ func (s *Service) Status(ctx context.Context, r *http.Request) Status {
 	}
 }
 
-func (s *Service) Login(ctx context.Context, r *http.Request, w http.ResponseWriter, username, password string, remember bool) (*LoginResult, error) {
+func (s *Service) Login(ctx context.Context, r *http.Request, w http.ResponseWriter, username, password string, remember bool, code, challenge string) (*LoginResult, error) {
+	if strings.TrimSpace(challenge) != "" {
+		return s.completeTwoFactorLogin(ctx, r, w, challenge, code)
+	}
 	storedUsername, storedPassword := s.adminCredentials(ctx)
 	if username != storedUsername {
 		s.log.Warn("管理员登录失败", "username", username, "ip", clientIP(r))
@@ -254,6 +269,54 @@ func (s *Service) Login(ctx context.Context, r *http.Request, w http.ResponseWri
 	if tempMatch {
 		reason = "temporary_password"
 	}
+	if s.twoFactorEnabled(ctx) {
+		payload, err := json.Marshal(loginChallenge{
+			Username:             username,
+			Generation:           s.configString(ctx, KeyAdminSessionGeneration, ""),
+			Remember:             remember,
+			MustChangePassword:   mustChange,
+			PasswordChangeReason: reason,
+		})
+		if err != nil {
+			return nil, domain.Wrap(domain.CodeInternal, err)
+		}
+		token, err := s.serializer().Dumps(string(payload))
+		if err != nil {
+			return nil, domain.Wrap(domain.CodeInternal, err)
+		}
+		return &LoginResult{Username: username, TwoFactorRequired: true, Challenge: token}, nil
+	}
+	return s.finishLogin(r, w, username, remember, mustChange, reason)
+}
+
+func (s *Service) completeTwoFactorLogin(ctx context.Context, r *http.Request, w http.ResponseWriter, challenge, code string) (*LoginResult, error) {
+	payload, err := s.serializer().Loads(strings.TrimSpace(challenge), twoFactorChallengeTTL)
+	if err != nil {
+		return nil, domain.Errorf(domain.CodeAdminAuthRequired, "验证请求已过期，请重新输入账号密码")
+	}
+	var login loginChallenge
+	if err := json.Unmarshal([]byte(payload), &login); err != nil || strings.TrimSpace(login.Username) == "" {
+		return nil, domain.Errorf(domain.CodeAdminAuthRequired, "验证请求无效")
+	}
+	storedUsername, _ := s.adminCredentials(ctx)
+	if login.Username != storedUsername ||
+		login.Generation != s.configString(ctx, KeyAdminSessionGeneration, "") ||
+		!s.twoFactorEnabled(ctx) {
+		return nil, domain.Errorf(domain.CodeAdminAuthRequired, "验证请求已失效，请重新登录")
+	}
+	attemptKey := login.Username + "|" + clientIP(r)
+	if !s.allowTwoFactorAttempt(attemptKey) {
+		return nil, domain.Errorf(domain.CodeRateLimited, "动态验证码错误次数过多，请 5 分钟后再试")
+	}
+	if err := s.verifyTwoFactorCode(ctx, code); err != nil {
+		s.log.Warn("管理员两步验证失败", "username", login.Username, "ip", clientIP(r))
+		return nil, err
+	}
+	s.clearTwoFactorAttempts(attemptKey)
+	return s.finishLogin(r, w, login.Username, login.Remember, login.MustChangePassword, login.PasswordChangeReason)
+}
+
+func (s *Service) finishLogin(r *http.Request, w http.ResponseWriter, username string, remember, mustChange bool, reason string) (*LoginResult, error) {
 	sess := Session{
 		IsAdmin:              true,
 		Username:             username,
@@ -396,6 +459,7 @@ func (s *Service) SystemConfig(ctx context.Context) SystemConfig {
 		LogRetentionDays:           s.configInt(ctx, "log_retention_days", 30),
 		AuthActiveRefreshEnabled:   s.configBool(ctx, "auth_active_refresh_enabled", true),
 		WebDAVEnabled:              s.webdavEnabled(ctx),
+		TwoFactorEnabled:           s.twoFactorEnabled(ctx),
 	}
 }
 

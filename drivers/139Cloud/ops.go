@@ -15,6 +15,7 @@ import (
 const (
 	downloadPartSize    = 10 * 1024 * 1024
 	downloadConcurrency = 3
+	transferPartSize    = 32 * 1024 * 1024
 )
 
 func (d *Driver) GetFileInfo(ctx context.Context, fileID string) (*domain.FileItem, error) {
@@ -64,15 +65,16 @@ func (d *Driver) ResolveDownload(ctx context.Context, req driver.DownloadRequest
 		forceProxy = true
 	}
 	return &domain.DownloadInfo{
-		URL:         downloadURL,
-		Headers:     headers,
-		Mode:        mode,
-		ForceProxy:  forceProxy,
-		Expiration:  5 * time.Minute,
-		FileName:    strings.TrimSpace(data.FileName),
-		Size:        size,
-		ChunkSize:   downloadPartSize,
-		Concurrency: downloadConcurrency,
+		URL:               downloadURL,
+		Headers:           headers,
+		Mode:              mode,
+		ForceProxy:        forceProxy,
+		Expiration:        5 * time.Minute,
+		FileName:          strings.TrimSpace(data.FileName),
+		Size:              size,
+		ChunkSize:         downloadPartSize,
+		Concurrency:       downloadConcurrency,
+		TransferChunkSize: transferPartSize,
 	}, nil
 }
 

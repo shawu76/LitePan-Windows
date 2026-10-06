@@ -111,8 +111,31 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 
 	var selected map[string]any
 	var inferredSeason *int
+	seasonAwareMatched := false
+	if groupMediaType == "tv" {
+		season := explicitLaterTVSeason(key, items)
+		if season != nil && keyYear != nil {
+			var err error
+			selected, err = p.matchTVBySeasonYear(attempts, *season, *keyYear)
+			if err != nil {
+				p.log(fmt.Sprintf("[计划] TMDB 季度校验异常 %s: %v", title, err))
+				return tmdbMatchResult{}, nil
+			}
+			if selected == nil {
+				p.log(fmt.Sprintf("[计划] TMDB 未找到标题、第 %d 季与 %d 年同时匹配的剧集，留待 AI/手动匹配", *season, *keyYear))
+				return tmdbMatchResult{}, nil
+			}
+			inferredSeason = season
+			seasonAwareMatched = true
+			chosenYear = nil // 目录年份是季度年份，不是整剧首播年份。
+			p.log(fmt.Sprintf("[计划] TMDB 季度校验匹配: %s | Season %02d (%d) -> tmdb-%v", title, *season, *keyYear, selected["id"]))
+		}
+	}
 
 	for _, attempt := range attempts {
+		if selected != nil {
+			break
+		}
 		hit, err := p.tmdbTryMatch(attempt.Title, attempt.Year, groupMediaType)
 		if err != nil {
 			p.log(fmt.Sprintf("[计划] TMDB 查询异常 %s: %v", title, err))
@@ -177,6 +200,9 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 		} else if displayYear != nil {
 			confidence = 0.65
 		}
+		if seasonAwareMatched {
+			confidence = 0.95
+		}
 	} else {
 		displayYear = chosenYear
 		if displayYear == nil {
@@ -209,6 +235,107 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 		out.inferredSeason = *inferredSeason
 	}
 	return out, nil
+}
+
+// explicitLaterTVSeason 只在文件或目录明确表达第二季及以后时启用季度年份匹配。
+// Season 01 容易是“有集无季”的默认值，不能据此重解释年份。
+func explicitLaterTVSeason(key groupKey, items []batchEntry) *int {
+	seasons := make(map[int]struct{})
+	if key.hasSeason && key.season > 1 {
+		seasons[key.season] = struct{}{}
+	}
+	if _, season := rules.StripSeasonSuffix(key.dirName); season != nil && *season > 1 {
+		seasons[*season] = struct{}{}
+	}
+	for _, entry := range items {
+		if entry.fileParsed.Season == nil || *entry.fileParsed.Season <= 1 {
+			continue
+		}
+		if rules.HasExplicitSeasonToken(entry.item.Name) || rules.IsSeasonDirName(entry.sourceDirName) {
+			seasons[*entry.fileParsed.Season] = struct{}{}
+		}
+	}
+	if len(seasons) != 1 {
+		return nil
+	}
+	for season := range seasons {
+		value := season
+		return &value
+	}
+	return nil
+}
+
+func (p *Planner) matchTVBySeasonYear(attempts []rules.TMDBMatchAttempt, season, seasonYear int) (map[string]any, error) {
+	queries := make([]string, 0, len(attempts)*2)
+	seenQueries := make(map[string]struct{})
+	addQuery := func(title string) {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return
+		}
+		key := strings.ToLower(title)
+		if _, ok := seenQueries[key]; ok {
+			return
+		}
+		seenQueries[key] = struct{}{}
+		queries = append(queries, title)
+	}
+	for _, attempt := range attempts {
+		baseTitle, declaredSeason := rules.StripSeasonSuffix(attempt.Title)
+		if declaredSeason == nil || *declaredSeason == season {
+			addQuery(baseTitle)
+		}
+		stripped, trailing := rules.StripTrailingNumber(baseTitle)
+		if trailing != nil && *trailing == season {
+			addQuery(stripped)
+		}
+	}
+
+	matches := make(map[string]map[string]any)
+	for _, query := range queries {
+		results, err := p.tmdb.Search(p.ctx, query, nil, "tv")
+		if err != nil {
+			return nil, err
+		}
+		for index, candidate := range rules.RawJSONListToMaps(results) {
+			if index >= 10 {
+				break
+			}
+			id, title, original, seriesYear := rules.ExtractTMDBDisplayFields(candidate, "tv")
+			if id == "" || seriesYear != nil && *seriesYear > seasonYear {
+				continue
+			}
+			if !rules.IsTMDBTitleCompatible(query, title, original) {
+				continue
+			}
+			seasons, err := p.getTVSeasons(id)
+			if err != nil {
+				return nil, err
+			}
+			if tvSeasonAiredInYear(seasons, season, seasonYear) {
+				matches[id] = candidate
+			}
+		}
+	}
+	if len(matches) != 1 {
+		return nil, nil
+	}
+	for _, match := range matches {
+		return match, nil
+	}
+	return nil, nil
+}
+
+func tvSeasonAiredInYear(seasons []map[string]any, expectedSeason, expectedYear int) bool {
+	for _, season := range seasons {
+		number := rules.AsFirstInt(season["season_number"])
+		if number == nil || *number != expectedSeason {
+			continue
+		}
+		airDate := strings.TrimSpace(fmt.Sprint(season["air_date"]))
+		return len(airDate) >= 4 && airDate[:4] == fmt.Sprintf("%04d", expectedYear)
+	}
+	return false
 }
 
 func (p *Planner) tmdbTryMatch(title string, year *int, mediaType string) (map[string]any, error) {

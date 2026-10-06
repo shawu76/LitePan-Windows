@@ -356,7 +356,7 @@ async function saveSettings() {
       v-model="qtvForm"
       :open="qtvWorkspaceOpen"
       title="夸克 STRM 接管 · 账号绑定"
-      caption="已绑定账号"
+      caption=""
       icon="hand-cloud"
       :subtitle="selectedBinding ? `TV 账号：${selectedBinding.tv_nickname || '未知'} · 会员：${displayMembership(selectedBinding)}` : ''"
       :items="workspaceItems"

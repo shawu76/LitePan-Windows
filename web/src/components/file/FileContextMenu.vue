@@ -6,6 +6,9 @@ export type ContextMenuItem = {
   action: string;
   label: string;
   danger?: boolean;
+  accessoryAction?: string;
+  accessoryIcon?: string;
+  accessoryTitle?: string;
 };
 
 const props = defineProps<{
@@ -22,6 +25,9 @@ function toMenuItems(items: ContextMenuItem[]): DropdownMenuItem[] {
     key: item.action,
     label: item.label,
     danger: item.danger,
+    accessoryAction: item.accessoryAction,
+    accessoryIcon: item.accessoryIcon,
+    accessoryTitle: item.accessoryTitle,
     type: "action" as const,
   }));
 }

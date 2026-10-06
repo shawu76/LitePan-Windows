@@ -29,10 +29,6 @@ import (
 
 const ossUploadAttempts = 3
 
-func newOSSUploadHTTPClient(base *http.Client) *http.Client {
-	return httpx.NewStreamingClient(base, 60*time.Second)
-}
-
 func (d *Driver) ossUploadHTTPClient() *http.Client {
 	if d.uploadClient != nil {
 		return d.uploadClient

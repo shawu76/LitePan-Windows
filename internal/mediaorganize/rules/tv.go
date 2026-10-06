@@ -197,10 +197,7 @@ func isCollectionContainerDir(name string) bool {
 	}
 	// 形如「一季」「2季」「前3季」的纯季名目录只是季范围容器，不是作品名。
 	title := strings.TrimSpace(NormalizeParsedMedia(ParseDirName(raw)).Title)
-	if seasonRangeTitleRe.MatchString(title) {
-		return true
-	}
-	return false
+	return seasonRangeTitleRe.MatchString(title)
 }
 
 func looksLikeStandaloneMovieDir(name string) bool {

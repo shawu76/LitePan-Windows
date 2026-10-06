@@ -189,7 +189,10 @@ func (p *Planner) planRecognizedGroup(group *deferredGroup, result recognition.W
 		key.mediaKind = result.MediaType
 	}
 	key.setYear(result.Year)
-	key.setSeason(result.Season)
+	// 只让 AI 补全内置规则未识别的季号。SxxExx、“第x季”等明确结果不得被模型覆盖。
+	if !key.hasSeason {
+		key.setSeason(result.Season)
+	}
 	items := append([]batchEntry(nil), group.items...)
 	resolvedFiles, resolveErr := p.resolveUnparsedEpisodes(group, key, items)
 	if p.ctx.Err() != nil {
@@ -210,8 +213,8 @@ func (p *Planner) planRecognizedGroup(group *deferredGroup, result recognition.W
 		items[index].fileParsed.Year = key.yearPtr()
 		if key.mediaKind == "tv" {
 			items[index].fileParsed.Type = "episode"
-			if result.Season != nil {
-				items[index].fileParsed.Season = result.Season
+			if items[index].fileParsed.Season == nil && key.hasSeason {
+				items[index].fileParsed.Season = key.seasonPtr()
 			}
 		} else {
 			items[index].fileParsed.Type = "movie"

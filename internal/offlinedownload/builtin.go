@@ -217,6 +217,7 @@ func (s *Service) Start(ctx context.Context) {
 		ids = append(ids, id)
 	}
 	runCtx := s.runCtx
+	s.runWG.Add(2)
 	s.mu.Unlock()
 
 	if n, err := s.CleanupOrphanTempDirs(runCtx, 0); err != nil {
@@ -224,10 +225,13 @@ func (s *Service) Start(ctx context.Context) {
 	} else if n > 0 {
 		s.log.Info("内置离线下载启动清理完成", "deleted", n)
 	}
-	s.runWG.Add(1)
 	go func() {
 		defer s.runWG.Done()
 		s.runTempCleanup(runCtx)
+	}()
+	go func() {
+		defer s.runWG.Done()
+		s.runNativePoll(runCtx)
 	}()
 	for _, id := range ids {
 		s.startBuiltinTask(id)

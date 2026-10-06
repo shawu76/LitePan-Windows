@@ -93,6 +93,34 @@ func TestDefaultConfigMatchesFourTemplates(t *testing.T) {
 	}
 }
 
+func TestRootDirectoriesFollowSelectedTemplateAndMediaType(t *testing.T) {
+	svc := newService(t, true)
+	if got := strings.Join(svc.RootDirectories("tv"), ","); got != "电视剧" {
+		t.Fatalf("电视剧任务一级目录 = %q, want %q", got, "电视剧")
+	}
+	if got := strings.Join(svc.RootDirectories("movie"), ","); got != "电影" {
+		t.Fatalf("电影任务一级目录 = %q, want %q", got, "电影")
+	}
+	if got := strings.Join(svc.RootDirectories("auto"), ","); got != "电影,电视剧" {
+		t.Fatalf("自动识别任务一级目录 = %q", got)
+	}
+
+	cfg := svc.Config()
+	cfg.SelectedTemplate = TemplateCustom
+	if _, err := svc.Update(context.Background(), cfg); err != nil {
+		t.Fatalf("切换自定义模板失败: %v", err)
+	}
+	if got := strings.Join(svc.RootDirectories("tv"), ","); got != "综艺,电视剧" {
+		t.Fatalf("自定义模板电视剧候选目录 = %q", got)
+	}
+}
+
+func TestRootDirectoriesDisabled(t *testing.T) {
+	if got := newService(t, false).RootDirectories("tv"); len(got) != 0 {
+		t.Fatalf("未启用分类时不应返回候选目录: %#v", got)
+	}
+}
+
 func TestCustomTemplateSupportsCompoundConditionsAndMixedDepth(t *testing.T) {
 	svc := newService(t, true)
 	cfg := svc.Config()

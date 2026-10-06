@@ -842,7 +842,7 @@ func (d *Driver) createRapidUpload(ctx context.Context, req driver.RapidUploadRe
 		}
 	} else {
 		if err := d.formRequest(ctx, http.MethodPost, apiURL+"/createUploadFile.action", url.Values{
-			"parentFolderId": {parentID},
+			"parentFolderId": {d.apiParentID(parentID)},
 			"fileName":       {fileName},
 			"size":           {strconv.FormatInt(req.Size, 10)},
 			"md5":            {hash},

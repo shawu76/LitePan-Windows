@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package fusemount
 
@@ -14,6 +14,10 @@ func reclaimMountPoint(mountPoint string) error {
 func forceReleaseMountPoint(mountPoint string) error {
 	_ = mountPoint
 	return nil
+}
+
+func ensureMountPointDir(mountPoint string) error {
+	return os.MkdirAll(filepath.Clean(mountPoint), 0o755)
 }
 
 func removeMountPointDir(mountPoint string) error {

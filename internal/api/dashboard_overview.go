@@ -197,7 +197,7 @@ func (h *Handler) dashboardOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 各分块失败已在内部降级，Wait 不会返回错误。
-	group.Wait()
+	_ = group.Wait()
 	writeOK(w, out)
 }
 

@@ -6,6 +6,24 @@ export interface CloudTool115Status {
   available: boolean;
 }
 
+export interface StrmDeleteTaskConfig {
+  task_id: number;
+  threshold: number;
+  strategy: "block" | "confirm";
+  delay_minutes: number;
+}
+
+export interface StrmDeleteConfig {
+  enabled: boolean;
+  items: StrmDeleteTaskConfig[];
+}
+
+export interface StrmDeleteStatus {
+  config: StrmDeleteConfig;
+  tasks: { id: number; name: string; local_dir: string }[];
+  pending: { id: number; task_id: number; task_name: string; relative_path: string; created_at: string }[];
+}
+
 export interface LocalUploadMapping {
   name: string;
   path: string;
@@ -159,6 +177,13 @@ export const cloudToolsApi = {
     http.post<{ enabled: boolean }>("/admin/tools/115-strm/enabled", { enabled }),
   clear115Cache: (accountId = 0) =>
     http.post<{ removed: number }>("/admin/tools/115-strm/cache/clear", { account_id: accountId }),
+};
+
+export const strmDeleteApi = {
+  getConfig: () => http.get<StrmDeleteStatus>("/admin/tools/strm-delete/config"),
+  saveConfig: (payload: StrmDeleteConfig) => http.put<StrmDeleteStatus>("/admin/tools/strm-delete/config", payload),
+  confirm: (id: number) => http.post<{ deleted: boolean }>(`/admin/tools/strm-delete/pending/${id}/confirm`),
+  cancel: (id: number) => http.post<{ cancelled: boolean }>(`/admin/tools/strm-delete/pending/${id}/cancel`),
 };
 
 export const localUploadApi = {

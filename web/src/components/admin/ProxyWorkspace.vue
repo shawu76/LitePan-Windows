@@ -5,6 +5,7 @@ import AppButton from "@/components/base/AppButton.vue";
 import AppModal from "@/components/base/AppModal.vue";
 import AppSelect from "@/components/base/AppSelect.vue";
 import SettingsHelpTooltip from "@/components/admin/SettingsHelpTooltip.vue";
+import SettingsSegment from "@/components/admin/SettingsSegment.vue";
 
 export interface ProxyFieldOption {
   value: string;
@@ -19,7 +20,7 @@ export interface ProxyField {
   helpTitle?: string;
   helpBody?: string;
   placeholder?: string;
-  type?: "text" | "password" | "select" | "switch" | "segmented-text";
+  type?: "text" | "password" | "select" | "switch" | "segment" | "segmented-text";
   inputmode?: "text" | "numeric";
   options?: ProxyFieldOption[];
   segmentKey?: string;
@@ -148,7 +149,7 @@ function cancelName() {
     <div class="ws">
       <!-- 左侧配置列表 -->
         <aside class="ws-side">
-          <div class="ws-side__cap">{{ caption }}</div>
+          <div v-if="caption" class="ws-side__cap">{{ caption }}</div>
           <div class="ws-side__list">
             <div
               v-for="item in items"
@@ -216,6 +217,13 @@ function cancelName() {
               :options="field.options || []"
             />
 
+            <SettingsSegment
+              v-else-if="field.type === 'segment'"
+              v-model="form[field.key]"
+              :label="field.label"
+              :options="field.options || []"
+            />
+
             <!-- 分段按钮 + 文本输入的一体式复合字段 -->
             <div v-else-if="field.type === 'segmented-text' && field.segmentKey" class="ws-segmented-input">
               <div class="ws-segmented-input__modes" role="group" :aria-label="field.label">
@@ -278,6 +286,8 @@ function cancelName() {
               <button type="button" class="ws-entry__copy" :disabled="!entryRunning" @click="emit('copy')">复制</button>
             </div>
           </div>
+
+          <slot name="main-extra" />
 
           <div class="ws-foot">
             <AppButton v-if="showTest" variant="secondary" :disabled="testing" @click="emit('test')">{{ testing ? "测试中…" : "测试连接" }}</AppButton>
@@ -379,6 +389,7 @@ function cancelName() {
 .ws-side__st.on {
   background: var(--success);
 }
+
 .ws-side__empty {
   padding: 26px 10px;
   text-align: center;

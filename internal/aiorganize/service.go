@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	promptVersion         = "v2"
+	promptVersion         = "v3"
 	cacheTTL              = 24 * time.Hour
 	maxCacheItems         = 256
 	maxChunkWorks         = 10
@@ -481,6 +481,11 @@ func validateResults(works []recognition.Work, items []recognition.WorkResult) [
 			item.Year = nil
 		}
 		if item.Season != nil && (*item.Season < 0 || *item.Season > 100) {
+			item.Season = nil
+		}
+		// 内置规则从 SxxExx 等明确标记得到的季号比模型推断更可靠。
+		// 模型返回冲突值时丢弃其季号，作品标题等其他识别结果仍可使用。
+		if work.CandidateSeason != nil && item.Season != nil && *work.CandidateSeason != *item.Season {
 			item.Season = nil
 		}
 		item.Files = nil

@@ -18,6 +18,7 @@ import ToolCard from "@/components/admin/ToolCard.vue";
 import LocalUploadToolCard from "@/components/admin/LocalUploadToolCard.vue";
 import ProxyToolsPanel from "@/components/admin/ProxyToolsPanel.vue";
 import QuarkTVToolCard from "@/components/admin/QuarkTVToolCard.vue";
+import StrmDeleteToolCard from "@/components/admin/StrmDeleteToolCard.vue";
 import SvgIcon from "@/components/icons/SvgIcon.vue";
 
 const props = withDefaults(defineProps<{ searchOpen?: boolean }>(), { searchOpen: false });
@@ -27,31 +28,34 @@ const { runLoad } = useSettingsLoad();
 
 const searchQuery = ref("");
 const searchInputRef = ref<HTMLInputElement | null>(null);
-const cardTitles = ["Emby/Jellyfin 反代", "飞牛影视反代", "115 STRM 增强", "夸克 STRM 接管", "AI 辅助识别", "目录整理分类", "从服务器上传", "垃圾清理工具", "视频海报生成"];
+const cardTitles = ["Emby/Jellyfin 反代", "飞牛影视反代", "115 STRM 增强", "夸克 STRM 接管", "AI 辅助识别", "目录整理分类", "从服务器上传", "垃圾清理工具", "视频海报生成", "STRM 删除监控"];
 
 function matches(title: string) {
   return containsQuery(title, searchQuery.value);
 }
 
-const hasMatch = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
-  return !q || cardTitles.some((t) => t.toLowerCase().includes(q));
-});
+const activeQuery = computed(() => searchQuery.value.trim());
+const hasMatch = computed(() => !activeQuery.value || cardTitles.some((title) => matches(title)));
 
+// 收起搜索框时保留筛选。
 function closeSearch() {
+  emit("update:searchOpen", false);
+}
+
+// 离开页面时清除筛选。
+function clearSearch() {
   searchQuery.value = "";
   emit("update:searchOpen", false);
 }
 
+defineExpose({ clearSearch });
+
 watch(
   () => props.searchOpen,
   async (open) => {
-    if (open) {
-      await nextTick();
-      searchInputRef.value?.focus();
-    } else {
-      searchQuery.value = "";
-    }
+    if (!open) return;
+    await nextTick();
+    searchInputRef.value?.focus();
   },
 );
 
@@ -175,8 +179,10 @@ async function clearCache() {
       <CleanupToolCard :search-query="searchQuery" />
 
       <CoverExtractToolCard :search-query="searchQuery" />
+
+      <StrmDeleteToolCard :search-query="searchQuery" />
     </div>
-    <div v-if="searchOpen && !hasMatch" class="tool-search__empty">没有找到相关工具</div>
+    <div v-if="!hasMatch" class="tool-search__empty">没有找到相关工具</div>
   </div>
 </template>
 

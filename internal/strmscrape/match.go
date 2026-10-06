@@ -235,7 +235,7 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		}
 	}
 	if (overwrite || !fileExists(poster)) && strings.TrimSpace(info.PosterPath) != "" {
-		data, err := client.DownloadImage(ctx, info.PosterPath, "w500")
+		data, err := client.DownloadImage(ctx, info.PosterPath, "original")
 		if err != nil {
 			return 0, err
 		}
@@ -244,12 +244,12 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		}
 	}
 	if cfg.Fanart && (overwrite || !workHasFanart(g)) && strings.TrimSpace(info.BackdropPath) != "" {
-		if _, err := s.writeOptionalArtwork(ctx, client, info.BackdropPath, workFanartPath(g), "详情页背景图"); err != nil {
+		if _, err := s.writeOptionalArtwork(ctx, client, info.BackdropPath, "original", workFanartPath(g), "详情页背景图"); err != nil {
 			return 0, err
 		}
 	}
 	if cfg.ClearLogo && (overwrite || !workHasClearLogo(g)) && strings.TrimSpace(info.LogoPath) != "" {
-		if _, err := s.writeOptionalArtwork(ctx, client, info.LogoPath, workClearLogoPath(g), "影片 Logo"); err != nil {
+		if _, err := s.writeOptionalArtwork(ctx, client, info.LogoPath, "original", workClearLogoPath(g), "影片 Logo"); err != nil {
 			return 0, err
 		}
 	}
@@ -394,7 +394,7 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 func buildNFOActors(client *tmdb.Client, actors []tmdbActor) []nfoActor {
 	out := make([]nfoActor, 0, len(actors))
 	for _, actor := range actors {
-		out = append(out, nfoActor{Name: actor.Name, Role: actor.Role, Order: actor.Order, Thumb: client.ImageURL(actor.ProfilePath, "w185")})
+		out = append(out, nfoActor{Name: actor.Name, Role: actor.Role, Order: actor.Order, Thumb: client.ImageURL(actor.ProfilePath, "h632")})
 	}
 	return out
 }
@@ -514,7 +514,7 @@ func (s *Service) writeSeasonPosters(ctx context.Context, client *tmdb.Client, g
 		if !overwrite && fileExists(out) {
 			continue
 		}
-		if _, err := s.writeOptionalArtwork(ctx, client, posterPath, out, fmt.Sprintf("第 %d 季海报", season)); err != nil {
+		if _, err := s.writeOptionalArtwork(ctx, client, posterPath, "original", out, fmt.Sprintf("第 %d 季海报", season)); err != nil {
 			return err
 		}
 	}

@@ -53,6 +53,7 @@ type Service struct {
 	nextRunOrder             uint64
 	scanProgress             map[int64]liveScanProgress
 	fileOperations           map[int64]struct{}
+	internalMutationUntil    map[int64]time.Time
 	organizeBusy             RunningAccountLister
 	retentionBusy            RunningAccountLister
 	automationManagedChecker func(context.Context, int64) (bool, error)
@@ -88,25 +89,26 @@ func NewService(opts ServiceOptions) *Service {
 		strmDir = filepath.Join(filepath.Dir(filepath.Clean(opts.DataDir)), "strm")
 	}
 	return &Service{
-		repo:            opts.Repo,
-		branches:        opts.Branches,
-		dirCache:        opts.DirCache,
-		files:           opts.Files,
-		playback:        opts.Playback,
-		settings:        opts.Settings,
-		dataDir:         opts.DataDir,
-		strmDir:         strmDir,
-		listenAddr:      opts.ListenAddr,
-		secret:          opts.Secret,
-		bus:             opts.Bus,
-		log:             log,
-		running:         make(map[int64]bool),
-		runningAccounts: make(map[int64]struct{}),
-		taskCancels:     make(map[int64]context.CancelFunc),
-		dirtyAccounts:   make(map[int64]bool),
-		pendingRun:      make(map[int64]string),
-		waitingRuns:     make(map[int64]queuedRun),
-		fileOperations:  make(map[int64]struct{}),
+		repo:                  opts.Repo,
+		branches:              opts.Branches,
+		dirCache:              opts.DirCache,
+		files:                 opts.Files,
+		playback:              opts.Playback,
+		settings:              opts.Settings,
+		dataDir:               opts.DataDir,
+		strmDir:               strmDir,
+		listenAddr:            opts.ListenAddr,
+		secret:                opts.Secret,
+		bus:                   opts.Bus,
+		log:                   log,
+		running:               make(map[int64]bool),
+		runningAccounts:       make(map[int64]struct{}),
+		taskCancels:           make(map[int64]context.CancelFunc),
+		dirtyAccounts:         make(map[int64]bool),
+		pendingRun:            make(map[int64]string),
+		waitingRuns:           make(map[int64]queuedRun),
+		fileOperations:        make(map[int64]struct{}),
+		internalMutationUntil: make(map[int64]time.Time),
 	}
 }
 
@@ -165,9 +167,17 @@ func (s *Service) TryBeginTaskFileOperation(taskID int64) (func(), bool) {
 		once.Do(func() {
 			s.mu.Lock()
 			delete(s.fileOperations, taskID)
+			s.markInternalMutationLocked(taskID)
 			s.mu.Unlock()
 		})
 	}, true
+}
+
+func (s *Service) markInternalMutationLocked(taskID int64) {
+	if s.internalMutationUntil == nil {
+		s.internalMutationUntil = make(map[int64]time.Time)
+	}
+	s.internalMutationUntil[taskID] = time.Now().Add(5 * time.Second)
 }
 
 func (s *Service) SetAutomationManagedChecker(checker func(context.Context, int64) (bool, error)) {
@@ -683,6 +693,17 @@ func (s *Service) scanSettings() ScanSettings {
 		MetadataSyncMode:      normalizeMetadataSyncMode(s.settings.String(settings.KeyStrmMetadataSyncMode)),
 		Tool115TreeEnabled:    s.settings.Bool(settings.KeyStrmTool115TreeEnabled),
 	}
+}
+
+// IsTaskMediaFile 使用与 STRM 扫描完全相同的扩展名规则判断媒体文件。
+func (s *Service) IsTaskMediaFile(task *domain.StrmTask, name string) bool {
+	if task == nil {
+		return false
+	}
+	rules := newScanRules(task, s.scanSettings())
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
+	_, ok := rules.mediaExts[ext]
+	return ok
 }
 
 func (s *Service) ListBranches(ctx context.Context, taskID int64) ([]*domain.StrmBranch, error) {

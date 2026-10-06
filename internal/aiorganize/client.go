@@ -21,6 +21,8 @@ var errModelResponseTimeout = errors.New("model response timeout")
 
 const recognitionSystemPrompt = `你是媒体文件识别助手。输入是内置规则无法稳定识别的多个作品组。
 只能根据输入中已有的 work_id、目录名、少量代表文件名和候选信息判断作品身份。
+文件名或相对路径中明确的 SxxExx、Sxx、Season xx、第x季是季号的权威信息；不得用作品首播年、目录年份或默认第一季覆盖。
+输入已提供 candidate_season 时必须保留该值；同一作品组无法确定唯一季号时不要返回 season。
 只返回 JSON 对象，格式为：
 {"items":[{"work_id":"work_1","recognized":true,"title":"中文或常用标题","original_title":"可选原名","year":2024,"media_type":"movie|tv","season":1}]}
 每个 work_id 最多返回一次。无法稳定判断时返回 recognized=false，不要猜。不要返回逐文件结果、目标目录、TMDB ID、置信度、文件新名或任何操作。`

@@ -19,7 +19,7 @@ type Driver struct {
 	driver.AuthRefreshControl
 	add          Addition
 	client       *http.Client
-	uploadClient *http.Client
+	uploadClient *http.Client // 分片上传使用独立的长连接客户端，普通 API 不受影响。
 
 	oauthBase string
 
@@ -29,6 +29,7 @@ type Driver struct {
 	mu             sync.Mutex
 	token          string
 	refresh        string
+	uid            string
 	offlineMissing map[string]int
 }
 
@@ -78,7 +79,7 @@ func (d *Driver) Init(ctx context.Context) error {
 		d.client = httpx.NewClient(httpx.ClientOptions{Timeout: 30 * time.Second})
 	}
 	if d.uploadClient == nil {
-		d.uploadClient = httpx.NewStreamingClient(d.client, 60*time.Second)
+		d.uploadClient = httpx.NewUploadClient(d.client, 60*time.Second, config.UploadUseHTTP2)
 	}
 	d.mu.Lock()
 	token := d.token
@@ -217,4 +218,8 @@ var (
 	_ driver.OfflineDownloadProvider  = (*Driver)(nil)
 	_ driver.OfflineURLDownloader     = (*Driver)(nil)
 	_ driver.OfflineTaskRefresher     = (*Driver)(nil)
+	_ driver.ShareCapabilityProvider  = (*Driver)(nil)
+	_ driver.ShareCreator             = (*Driver)(nil)
+	_ driver.ShareLister              = (*Driver)(nil)
+	_ driver.ShareUpdater             = (*Driver)(nil)
 )

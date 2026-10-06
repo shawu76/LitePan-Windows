@@ -13,6 +13,8 @@ export interface LoginResult {
   is_admin: boolean;
   must_change_password?: boolean;
   password_change_reason?: string;
+  two_factor_required?: boolean;
+  challenge?: string;
 }
 
 export interface SystemConfig {
@@ -31,6 +33,7 @@ export interface SystemConfig {
   log_retention_days?: number;
   auth_active_refresh_enabled?: boolean;
   webdav_enabled?: boolean;
+  two_factor_enabled?: boolean;
 }
 
 export interface UpdateCredentialsRequest {
@@ -65,15 +68,55 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
 }
 
 export async function login(input: {
-  username: string;
-  password: string;
-  remember: boolean;
+  username?: string;
+  password?: string;
+  remember?: boolean;
+  code?: string;
+  challenge?: string;
 }): Promise<LoginResult> {
   const body = new URLSearchParams();
-  body.set("username", input.username);
-  body.set("password", input.password);
+  body.set("username", input.username ?? "");
+  body.set("password", input.password ?? "");
   body.set("remember", input.remember ? "1" : "");
+  if (input.code) body.set("code", input.code);
+  if (input.challenge) body.set("challenge", input.challenge);
   return http.form<LoginResult>("/auth/login", body);
+}
+
+export interface TwoFactorSetupResult {
+  setup_token: string;
+  secret: string;
+  otpauth_url: string;
+  qr_code: string;
+}
+
+export interface TwoFactorRecoveryResult {
+  recovery_codes: string[];
+}
+
+export async function beginTwoFactorSetup(payload: {
+  password: string;
+  verification_code?: string;
+}): Promise<TwoFactorSetupResult> {
+  return http.post<TwoFactorSetupResult>("/admin/two-factor/setup", payload);
+}
+
+export async function confirmTwoFactorSetup(payload: {
+  setup_token: string;
+  code: string;
+}): Promise<TwoFactorRecoveryResult> {
+  return http.post<TwoFactorRecoveryResult>("/admin/two-factor/confirm", payload);
+}
+
+export async function disableTwoFactor(payload: { password: string; code: string }): Promise<void> {
+  await http.post<Record<string, never>>("/admin/two-factor/disable", payload);
+}
+
+export async function regenerateTwoFactorRecoveryCodes(payload: {
+  password: string;
+  code: string;
+}): Promise<TwoFactorRecoveryResult> {
+  return http.post<TwoFactorRecoveryResult>("/admin/two-factor/recovery-codes", payload);
 }
 
 export async function logout(): Promise<void> {

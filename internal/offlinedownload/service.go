@@ -23,10 +23,7 @@ import (
 	"litepan/pkg/timeutil"
 )
 
-const (
-	refreshMinInterval = 3 * time.Second
-	preparationTTL     = 30 * time.Minute
-)
+const preparationTTL = 30 * time.Minute
 
 type Options struct {
 	Exec     *driverexec.Executor
@@ -64,7 +61,8 @@ type Service struct {
 	mu                   sync.Mutex
 	tasks                map[string]*Task
 	prepared             map[string]preparedTorrent
-	lastRefresh          map[int64]time.Time
+	nativePolls          map[int64]*nativePollState
+	nativeWake           chan struct{}
 	uploads              *upload.Manager
 	builtinRun           map[string]builtinRunState
 	builtinLimit         int
@@ -96,7 +94,8 @@ func New(opts Options) *Service {
 		log:             opts.Log,
 		tasks:           make(map[string]*Task),
 		prepared:        make(map[string]preparedTorrent),
-		lastRefresh:     make(map[int64]time.Time),
+		nativePolls:     make(map[int64]*nativePollState),
+		nativeWake:      make(chan struct{}, 1),
 		builtinRun:      make(map[string]builtinRunState),
 		builtinLimit:    builtinConcurrency(opts.Settings),
 		builtinWake:     make(chan struct{}),
@@ -394,60 +393,6 @@ func (s *Service) List(ctx context.Context, accountID int64, refresh bool) ([]Ta
 	return out, nil
 }
 
-func (s *Service) Refresh(ctx context.Context, accountID int64, force bool) error {
-	groups := make(map[int64][]driver.OfflineTaskRef)
-	s.mu.Lock()
-	now := time.Now()
-	for _, task := range s.tasks {
-		if accountID > 0 && task.AccountID != accountID {
-			continue
-		}
-		if isTerminal(task.Status) {
-			continue
-		}
-		if task.ProviderKind == ProviderBuiltin {
-			continue
-		}
-		groups[task.AccountID] = append(groups[task.AccountID], driver.OfflineTaskRef{
-			ProviderTaskID: task.ProviderTaskID,
-			InfoHash:       task.InfoHash,
-		})
-	}
-	for id := range groups {
-		if !force && now.Sub(s.lastRefresh[id]) < refreshMinInterval {
-			delete(groups, id)
-			continue
-		}
-		s.lastRefresh[id] = now
-	}
-	s.mu.Unlock()
-
-	var firstErr error
-	for id, refs := range groups {
-		var updates []driver.OfflineTaskUpdate
-		err := s.exec.Run(ctx, id, func(drv driver.Driver) error {
-			d, err := driverexec.Require[driver.OfflineTaskRefresher](drv)
-			if err != nil {
-				return err
-			}
-			got, err := d.RefreshOfflineTasks(ctx, refs)
-			if err != nil {
-				return err
-			}
-			updates = got
-			return nil
-		})
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		s.applyUpdates(id, updates)
-	}
-	return firstErr
-}
-
 func (s *Service) Delete(ctx context.Context, taskID string) error {
 	s.mu.Lock()
 	task, ok := s.tasks[taskID]
@@ -511,6 +456,7 @@ func (s *Service) Delete(ctx context.Context, taskID string) error {
 	s.mu.Lock()
 	delete(s.tasks, taskID)
 	s.mu.Unlock()
+	s.wakeNativePoll()
 	return nil
 }
 
@@ -581,13 +527,14 @@ func (s *Service) RemoveTasksByAccount(ctx context.Context, accountID int64) (in
 		delete(s.tasks, id)
 		count++
 	}
-	delete(s.lastRefresh, accountID)
+	delete(s.nativePolls, accountID)
 	for id, prep := range s.prepared {
 		if prep.accountID == accountID {
 			delete(s.prepared, id)
 		}
 	}
 	s.mu.Unlock()
+	s.wakeNativePoll()
 	for _, temp := range tempPaths {
 		s.removeBuiltinTaskTemp(temp.taskID, temp.localPath)
 	}
@@ -597,7 +544,7 @@ func (s *Service) RemoveTasksByAccount(ctx context.Context, accountID int64) (in
 	return count, nil
 }
 
-func (s *Service) applyUpdates(accountID int64, updates []driver.OfflineTaskUpdate) {
+func (s *Service) applyUpdates(accountID int64, updates []driver.OfflineTaskUpdate) bool {
 	byRef := make(map[string]driver.OfflineTaskUpdate, len(updates)*2)
 	for _, update := range updates {
 		if update.ProviderTaskID != "" {
@@ -609,14 +556,18 @@ func (s *Service) applyUpdates(accountID int64, updates []driver.OfflineTaskUpda
 	}
 	var changed []*Task
 	var completed []Task
+	progressed := false
 	s.mu.Lock()
 	for _, task := range s.tasks {
-		if task.AccountID != accountID || isTerminal(task.Status) {
+		if task.AccountID != accountID || task.ProviderKind == ProviderBuiltin || isTerminal(task.Status) {
 			continue
 		}
 		update, ok := byRef[task.refKey()]
 		if !ok {
 			continue
+		}
+		if (update.Status != "" && task.Status != update.Status) || clampProgress(update.Progress) > task.Progress {
+			progressed = true
 		}
 		if update.Status != "" {
 			task.Status = update.Status
@@ -665,14 +616,35 @@ func (s *Service) applyUpdates(accountID int64, updates []driver.OfflineTaskUpda
 			})
 		}
 	}
+	return progressed
 }
 
 func (s *Service) putTask(task *Task) {
 	copy := *task
+	native := isActiveNativeTask(&copy)
+	// 先保存原生任务，再交给后台检查，避免创建记录覆盖刚写入的完成状态。
+	if native {
+		s.persist(&copy)
+	}
 	s.mu.Lock()
+	_, exists := s.tasks[task.TaskID]
 	s.tasks[task.TaskID] = &copy
+	if !exists && native {
+		if state := s.nativePolls[copy.AccountID]; state != nil && !state.failed {
+			state.interval = nativePollMinInterval
+			next := time.Now().Add(nativePollMinInterval)
+			if state.next.After(next) {
+				state.next = next
+			}
+		}
+	}
 	s.mu.Unlock()
-	s.persist(&copy)
+	if !native {
+		s.persist(&copy)
+	}
+	if !exists && native {
+		s.wakeNativePoll()
+	}
 }
 
 func (s *Service) persist(task *Task) {

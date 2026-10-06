@@ -153,18 +153,16 @@ func (s *Service) validateOrganizeToStrm(ctx context.Context, organizeTaskID str
 	if organizeTask.AccountID != strmTask.AccountID {
 		return false, "整理任务与 STRM 任务账号不一致"
 	}
-	cfg := decodeMap(organizeTask.Config)
-	organizePath := strings.TrimSpace(anyString(cfg["target_root"]))
-	if organizePath == "" {
-		organizePath = strings.TrimSpace(anyString(cfg["target_directory"]))
-	}
-	if organizePath == "" {
-		return false, "整理任务未配置目标目录"
-	}
-	organizePath = normalizePath(organizePath)
 	strmPath := normalizePath(strmTask.Path)
-	if organizePath == strmPath || strings.HasPrefix(organizePath, strings.TrimRight(strmPath, "/")+"/") {
-		return true, "可联动"
+	organizePaths, err := s.organize.TargetPathCandidates(organizeTask)
+	if err != nil {
+		return false, err.Error()
+	}
+	for _, candidate := range organizePaths {
+		organizePath := normalizePath(candidate)
+		if organizePath == strmPath || strings.HasPrefix(organizePath, strings.TrimRight(strmPath, "/")+"/") {
+			return true, "可联动"
+		}
 	}
 	return false, "整理目标目录不在 STRM 扫描目录内"
 }

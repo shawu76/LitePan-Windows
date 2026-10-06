@@ -198,7 +198,7 @@ async function removeMapping() {
       v-model="localForm"
       :open="mappingOpen"
       title="从服务器上传 · 目录映射设置"
-      caption="映射目录"
+      caption=""
       icon="hand-folder"
       :subtitle="selectedName ? `容器内路径 · ${localForm.path || '未填写'}` : ''"
       :items="workspaceItems"

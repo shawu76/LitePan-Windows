@@ -320,7 +320,7 @@ func TestWriteMatchedAddsFanartAndActors(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":1,"title":"测试电影","overview":"简介","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","credits":{"cast":[{"name":"演员甲","character":"角色甲","profile_path":"/actor.jpg","order":0}]}}`))
 		case "/3/movie/1/images":
 			_, _ = w.Write([]byte(`{"logos":[{"file_path":"/en.png","iso_639_1":"en"},{"file_path":"/zh.png","iso_639_1":"zh"}]}`))
-		case "/t/p/w500/poster.jpg", "/t/p/w500/backdrop.jpg", "/t/p/w500/zh.png":
+		case "/t/p/original/poster.jpg", "/t/p/original/backdrop.jpg", "/t/p/original/zh.png":
 			_, _ = w.Write([]byte("image"))
 		default:
 			http.NotFound(w, r)
@@ -364,7 +364,7 @@ func TestWriteMatchedAddsFanartAndActors(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(nfo)
-	for _, expected := range []string{"<custom>保留</custom>", "<actor>", "<name>演员甲</name>", "<role>角色甲</role>", server.URL + "/t/p/w185/actor.jpg"} {
+	for _, expected := range []string{"<custom>保留</custom>", "<actor>", "<name>演员甲</name>", "<role>角色甲</role>", server.URL + "/t/p/h632/actor.jpg"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("NFO 缺少 %q：%s", expected, text)
 		}

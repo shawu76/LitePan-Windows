@@ -166,6 +166,60 @@ func TestReplanMatchedGroupUsesSelectedTVTypeForBareNumberedFiles(t *testing.T) 
 	}
 }
 
+func TestReplanMatchedGroupUsesRecordedFilesWhenFolderYearIsSeasonYear(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root":  {{ID: "show2", Name: "测试剧 (2024)", IsDir: true}},
+		"show2": {{ID: "season2", Name: "Season 02", IsDir: true}},
+		"season2": {
+			{ID: "e1", Name: "测试剧.S02E01.2024.mkv"},
+			{ID: "bonus", Name: "幕后特辑.2024.mkv"},
+		},
+	}}
+	p := planner.New(
+		context.Background(), fs, 1,
+		planner.TaskConfig{
+			TargetDirectoryID: "root", TargetRootID: "/已整理", ActionType: "move",
+			MediaType: "auto", RenameMarker: "tmdb", UseTMDB: true, Recursive: true,
+		},
+		planner.Settings{"mo_tmdb_api_key": "test-key"},
+		"task-test", nil, func(string) {}, nil, func() error { return nil },
+	)
+
+	plan, err := p.ReplanMatchedGroup(planner.ManualMatchGroup{
+		GroupUID:  "tv|show2|测试剧 (2024)|测试剧",
+		MediaKind: "tv",
+		DirID:     "show2",
+		DirName:   "测试剧 (2024)",
+		Title:     "测试剧",
+		SourceIDs: []string{"e1"},
+	}, map[string]any{
+		"id": 12345, "name": "测试剧", "first_air_date": "2023-03-01", "media_type": "tv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var workDir, episode *moplan.PlanAction
+	for i := range plan.Actions {
+		action := &plan.Actions[i]
+		if action.Kind == "ensure_dir" && action.Metadata["is_work_dir"] == true {
+			workDir = action
+		}
+		if action.SourceID == "e1" {
+			episode = action
+		}
+		if action.SourceID == "bonus" {
+			t.Fatalf("人工匹配不应把同目录其他作品并入: %+v", action)
+		}
+	}
+	if workDir == nil || workDir.TargetName != "测试剧 (2023) {tmdb-12345}" {
+		t.Fatalf("人工匹配应使用 TMDB 剧集首播年份: %+v", workDir)
+	}
+	if episode == nil || !strings.Contains(episode.TargetName, "S02E01") {
+		t.Fatalf("第二季集数信息应保留: %+v", episode)
+	}
+}
+
 // TestNeedsMatchDetected 验证识别不到的作品会进入 needs_match，供用户手动匹配。
 func TestNeedsMatchDetected(t *testing.T) {
 	fs := &mockFS{dirs: map[string][]domain.FileItem{

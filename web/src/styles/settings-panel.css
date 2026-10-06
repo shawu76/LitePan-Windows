@@ -280,6 +280,50 @@
   font-size: 12px;
 }
 
+.settings-help__popover--panel {
+  width: min(400px, calc(100vw - 24px));
+  min-width: 0;
+  max-width: none;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+/* 压在图标下方时没有可指的箭头，直接不画（否则箭头会指向空处） */
+.settings-help__popover--under::before,
+.settings-help__popover--under::after {
+  display: none;
+}
+
+/* 压到下方时宽度由脚本按容器算，min-width 要让位，否则窄弹窗里还是会溢出 */
+.settings-help__popover--under {
+  min-width: 0;
+}
+
+/* 面板宽度被限到弹窗内时，min-width 也要跟着让位，否则窄弹窗里还是会溢出 */
+.settings-help__popover--under.settings-help__popover--panel {
+  width: 100%;
+}
+
+.settings-help__popover--panel .settings-help__title {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom-color: var(--border-soft);
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-help__popover--panel .settings-help__body {
+  padding: 14px 16px 16px;
+  color: var(--text-regular);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .settings-help__section {
   color: var(--brand);
   font-weight: 600;

@@ -15,6 +15,7 @@ type ManualMatchGroup struct {
 	DirID     string
 	DirName   string
 	Title     string
+	SourceIDs []string
 }
 
 func (p *Planner) ReplanMatchedGroup(group ManualMatchGroup, raw map[string]any) (*moplan.Plan, error) {
@@ -52,8 +53,16 @@ func (p *Planner) ReplanMatchedGroup(group ManualMatchGroup, raw map[string]any)
 		// 手动选中的类型优先于自动猜测，否则改选后仍按旧类型重建。
 		key.mediaKind = selectedKind
 	}
-	p.recordManualMatchGroup(key, len(items))
 	match := manualTMDBMatchResult(raw, key.mediaKind)
+	// 人工选择的 TMDB 作品是最终依据：目录中的年份可能是当季年份，
+	// 不能继续覆盖剧集首播年份。
+	if match.title != "" {
+		key.title = match.title
+	}
+	if match.year != nil {
+		key.setYear(match.year)
+	}
+	p.recordManualMatchGroup(key, len(items))
 	if err := p.planGroupWithMatch(key, items, bucketDefaults, &match, false); err != nil {
 		return nil, err
 	}
@@ -108,6 +117,9 @@ func locateManualMatchGroup(groups map[groupKey][]batchEntry, group ManualMatchG
 	if len(groups) == 0 {
 		return groupKey{}, nil, false
 	}
+	if key, items, ok := locateManualMatchFiles(groups, group); ok {
+		return key, items, true
+	}
 	for key, items := range groups {
 		if groupUIDOf(key) == group.GroupUID {
 			return key, items, true
@@ -134,6 +146,49 @@ func locateManualMatchGroup(groups map[groupKey][]batchEntry, group ManualMatchG
 		}
 	}
 	return groupKey{}, nil, false
+}
+
+// locateManualMatchFiles 使用初次计划记录的源文件集重建作品组。
+// 人工选择是明确纠错，不应再受目录年份、自动类型或二次分组结果影响。
+func locateManualMatchFiles(groups map[groupKey][]batchEntry, group ManualMatchGroup) (groupKey, []batchEntry, bool) {
+	if len(group.SourceIDs) == 0 {
+		return groupKey{}, nil, false
+	}
+	wanted := make(map[string]struct{}, len(group.SourceIDs))
+	for _, sourceID := range group.SourceIDs {
+		if sourceID = strings.TrimSpace(sourceID); sourceID != "" {
+			wanted[sourceID] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return groupKey{}, nil, false
+	}
+	var selectedKey groupKey
+	items := make([]batchEntry, 0, len(wanted))
+	for key, candidates := range groups {
+		for _, entry := range candidates {
+			if _, ok := wanted[entry.item.ID]; !ok {
+				continue
+			}
+			if len(items) == 0 {
+				selectedKey = key
+			}
+			items = append(items, entry)
+		}
+	}
+	if len(items) == 0 {
+		return groupKey{}, nil, false
+	}
+	if group.DirID != "" {
+		selectedKey.dirID = group.DirID
+	}
+	if group.DirName != "" {
+		selectedKey.dirName = group.DirName
+	}
+	if group.Title != "" {
+		selectedKey.title = group.Title
+	}
+	return selectedKey, items, true
 }
 
 func sameMediaKind(a, b string) bool {

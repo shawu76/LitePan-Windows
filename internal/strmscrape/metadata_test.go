@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"litepan/internal/mediaorganize/tmdb"
 )
 
 // 构造一个「根已齐」的电影作品目录：<strm>.nfo + poster.jpg。
@@ -345,12 +349,47 @@ func TestSceneNFOIsNotTreatedAsMetadata(t *testing.T) {
 }
 
 type stubImageDownloader struct {
-	data []byte
-	err  error
+	data  []byte
+	err   error
+	calls *int
 }
 
 func (d stubImageDownloader) DownloadImage(context.Context, string, string) ([]byte, error) {
+	if d.calls != nil {
+		(*d.calls)++
+	}
 	return d.data, d.err
+}
+
+func TestMissingTMDBArtworkSkipsDownloadAndWarning(t *testing.T) {
+	for _, field := range []string{"", `,"still_path":null,"poster_path":null`, `,"still_path":"","poster_path":""`, `,"still_path":"  ","poster_path":"  "`} {
+		t.Run(field, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"name":"Season 1"%s,"episodes":[{"episode_number":3%s}]}`, field, field)
+			}))
+			defer server.Close()
+			client := tmdb.NewClient(tmdb.Options{APIKey: "test", APIBaseHost: server.URL})
+			detail, err := fetchSeasonDetail(context.Background(), client, "335826", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail.PosterPath != "" || len(detail.Episodes) != 1 || detail.Episodes[0].StillPath != "" {
+				t.Fatalf("未提供图片时应解析为空路径：%+v", detail)
+			}
+			var logs bytes.Buffer
+			svc := &Service{log: slog.New(slog.NewTextHandler(&logs, nil))}
+			calls := 0
+			out := filepath.Join(t.TempDir(), "episode-thumb.jpg")
+			written, err := svc.writeOptionalArtwork(context.Background(), stubImageDownloader{calls: &calls, err: errors.New("不应调用下载")}, detail.Episodes[0].StillPath, "w500", out, "S01E03 缩略图")
+			if err != nil || written || calls != 0 || logs.Len() != 0 {
+				t.Fatalf("缺图应静默跳过：written=%v err=%v calls=%d logs=%s", written, err, calls, logs.String())
+			}
+			if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("缺图不应写入文件：%v", err)
+			}
+		})
+	}
 }
 
 func TestWriteOptionalArtworkSkipsDownloadFailure(t *testing.T) {
@@ -358,7 +397,7 @@ func TestWriteOptionalArtworkSkipsDownloadFailure(t *testing.T) {
 	svc := &Service{log: slog.New(slog.NewTextHandler(&logs, nil))}
 	out := filepath.Join(t.TempDir(), "episode-thumb.jpg")
 
-	written, err := svc.writeOptionalArtwork(context.Background(), stubImageDownloader{err: fmt.Errorf("图片 404")}, "/missing.jpg", out, "S01E275 缩略图")
+	written, err := svc.writeOptionalArtwork(context.Background(), stubImageDownloader{err: fmt.Errorf("图片 404")}, "/missing.jpg", "w500", out, "S01E275 缩略图")
 	if err != nil {
 		t.Fatalf("可选图片下载失败不应中断刮削，err=%v", err)
 	}
@@ -368,7 +407,7 @@ func TestWriteOptionalArtworkSkipsDownloadFailure(t *testing.T) {
 	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("下载失败后不应生成图片，err=%v", err)
 	}
-	if text := logs.String(); !strings.Contains(text, "可选图片下载失败") || !strings.Contains(text, "S01E275 缩略图") {
+	if text := logs.String(); !strings.Contains(text, "可选图片下载失败") || !strings.Contains(text, "S01E275 缩略图") || !strings.Contains(text, "图片 404") {
 		t.Fatalf("未记录可选图片警告：%s", text)
 	}
 }
@@ -380,7 +419,7 @@ func TestWriteOptionalArtworkPreservesWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &Service{}
-	_, err := svc.writeOptionalArtwork(context.Background(), stubImageDownloader{data: []byte("image")}, "/ok.jpg", filepath.Join(notDir, "thumb.jpg"), "S01E275 缩略图")
+	_, err := svc.writeOptionalArtwork(context.Background(), stubImageDownloader{data: []byte("image")}, "/ok.jpg", "w500", filepath.Join(notDir, "thumb.jpg"), "S01E275 缩略图")
 	if err == nil || !strings.Contains(err.Error(), "写入S01E275 缩略图") {
 		t.Fatalf("本地写入失败必须保留，err=%v", err)
 	}
@@ -390,7 +429,7 @@ func TestWriteOptionalArtworkPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	svc := &Service{}
-	_, err := svc.writeOptionalArtwork(ctx, stubImageDownloader{err: fmt.Errorf("请求失败")}, "/cancel.jpg", filepath.Join(t.TempDir(), "thumb.jpg"), "S01E275 缩略图")
+	_, err := svc.writeOptionalArtwork(ctx, stubImageDownloader{err: fmt.Errorf("请求失败")}, "/cancel.jpg", "w500", filepath.Join(t.TempDir(), "thumb.jpg"), "S01E275 缩略图")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("任务取消不能被降级为警告，err=%v", err)
 	}

@@ -2,9 +2,6 @@
 /data/
 /strm/
 /mounts/
-/output/data/
-/output/strm/
-/output/litepan-data/
 *.db
 *.db-wal
 *.db-shm
@@ -37,3 +34,9 @@ dist/*.tar.gz
 .env
 .env.*
 drivers/115/
+
+# 测试运行数据（e2e/smoke/挂载验证）
+/.e2e*/
+/.smoke*/
+/output/data/
+*.exe~

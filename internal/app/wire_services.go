@@ -9,6 +9,7 @@ import (
 	"litepan/internal/automation"
 	"litepan/internal/cacheretention"
 	"litepan/internal/classifyorganize"
+	"litepan/internal/cloudshare"
 	"litepan/internal/config"
 	"litepan/internal/crosstransfer"
 	"litepan/internal/domain"
@@ -25,6 +26,7 @@ import (
 	"litepan/internal/quarktv"
 	"litepan/internal/settings"
 	"litepan/internal/strm"
+	"litepan/internal/strmdelete"
 	"litepan/internal/strmscrape"
 	"litepan/internal/upload"
 )
@@ -33,10 +35,12 @@ type servicesBundle struct {
 	files            *file.Service
 	uploads          *upload.Manager
 	offlineDownloads *offlinedownload.Service
+	cloudShares      *cloudshare.Service
 	playback         *playback.Service
 	account          *account.Service
 	accountProfile   *accountprofile.Service
 	strm             *strm.Service
+	strmDelete       *strmdelete.Service
 	mediaOrganize    *mediaorganize.Service
 	aiOrganize       *aiorganize.Service
 	classifyOrganize *classifyorganize.Service
@@ -63,6 +67,15 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 	playbackSvc := playback.NewService(core.exec, core.cache)
 	playbackSvc.SetLogger(logs.For(logx.ModuleSystem))
 	strmSvc, coord := wireSTRM(st, fileSvc, playbackSvc, core.bus, logs, cfg.DataDir, cfg.StrmDir, cfg.ListenAddr, core.secret)
+	strmDeleteSvc := strmdelete.New(strmdelete.Options{
+		Configs: st.store.Configs,
+		Tasks:   st.store.StrmTasks,
+		Files:   fileSvc,
+		Strm:    strmSvc,
+		StrmDir: cfg.StrmDir,
+		Bus:     core.bus,
+		Log:     logs.For(logx.ModuleSystem),
+	})
 	retentionSvc, retentionCoord := wireCacheRetention(st, fileSvc, core.cache, core.bus, logs)
 	aiOrganizeSvc := aiorganize.New(st.settings)
 	classifyOrganizeSvc := classifyorganize.New(st.settings)
@@ -92,6 +105,7 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 		Bus:      core.bus,
 		Log:      logs.For(logx.ModuleFileOp),
 	})
+	cloudShareSvc := cloudshare.New(core.exec)
 	fusemount.ApplyConfiguredMountRoot(context.Background(), st.store.Configs)
 	fuseSvc := fusemount.New(fusemount.Options{
 		Repo:      st.store.FuseMounts,
@@ -207,10 +221,12 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 		files:            fileSvc,
 		uploads:          uploadSvc,
 		offlineDownloads: offlineDownloadSvc,
+		cloudShares:      cloudShareSvc,
 		playback:         playbackSvc,
 		account:          accountSvc,
 		accountProfile:   accountProfileSvc,
 		strm:             strmSvc,
+		strmDelete:       strmDeleteSvc,
 		mediaOrganize:    mediaOrganizeSvc,
 		aiOrganize:       aiOrganizeSvc,
 		classifyOrganize: classifyOrganizeSvc,

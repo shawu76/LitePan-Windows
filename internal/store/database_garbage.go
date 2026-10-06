@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+const readNotificationsKeyPrefix = "read_notifications:"
 
 // DatabaseGarbage 是可由垃圾清理工具安全识别的数据库残留。
 type DatabaseGarbage struct {
@@ -66,6 +69,22 @@ func (db *DB) ScanGarbage(ctx context.Context) ([]DatabaseGarbage, error) {
 		}
 	}
 
+	var readNotificationCount, readNotificationMaxID int64
+	if err := db.read.QueryRowContext(ctx,
+		`SELECT COUNT(1), COALESCE(MAX(id), 0) FROM notifications WHERE is_read=1 AND ref_id=0`,
+	).Scan(&readNotificationCount, &readNotificationMaxID); err != nil {
+		return nil, fmt.Errorf("scan read notifications: %w", err)
+	}
+	if readNotificationCount > 0 {
+		items = append(items, DatabaseGarbage{
+			Key:    readNotificationsKeyPrefix + strconv.FormatInt(readNotificationMaxID, 10),
+			Name:   "历史已读通知",
+			Detail: "notifications",
+			Count:  readNotificationCount,
+			Kind:   "notification",
+		})
+	}
+
 	var tables []string
 	var rows int64
 	for _, table := range deprecatedTables {
@@ -95,6 +114,18 @@ func (db *DB) ScanGarbage(ctx context.Context) ([]DatabaseGarbage, error) {
 func (db *DB) CleanupGarbage(ctx context.Context, key string) (int64, error) {
 	if key == "deprecated_tables" {
 		return db.dropDeprecatedTables(ctx)
+	}
+	if strings.HasPrefix(key, readNotificationsKeyPrefix) {
+		maxID, err := strconv.ParseInt(strings.TrimPrefix(key, readNotificationsKeyPrefix), 10, 64)
+		if err != nil || maxID <= 0 {
+			return 0, fmt.Errorf("invalid read notifications cleanup key %q", key)
+		}
+		res, err := db.write.ExecContext(ctx,
+			`DELETE FROM notifications WHERE is_read=1 AND ref_id=0 AND id<=?`, maxID)
+		if err != nil {
+			return 0, fmt.Errorf("cleanup read notifications: %w", err)
+		}
+		return res.RowsAffected()
 	}
 	name := strings.TrimPrefix(key, "orphan:")
 	for _, rule := range orphanRules {

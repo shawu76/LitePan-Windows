@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"litepan/internal/domain"
+	"litepan/internal/mediaorganize/classification"
 	"litepan/internal/mediaorganize/moplan"
 	"litepan/internal/mediaorganize/planner"
 	"litepan/internal/mediaorganize/tmdb"
@@ -100,7 +102,17 @@ func (s *Service) replanMatchedGroup(
 		nil,
 		func() error { return nil },
 	)
+	s.configureManualMatchPlanner(p)
 	return p.ReplanMatchedGroup(group, raw)
+}
+
+func (s *Service) configureManualMatchPlanner(p *planner.Planner) {
+	if p == nil {
+		return
+	}
+	if enhancer, ok := s.classification.(classification.Enhancer); ok {
+		p.SetClassificationEnhancer(enhancer)
+	}
 }
 
 func bindingFindManualMatchGroup(plan *Plan, groupUID, mediaKind string) planner.ManualMatchGroup {
@@ -169,7 +181,28 @@ func bindingFillManualMatchGroup(group planner.ManualMatchGroup, entry map[strin
 	if group.Title == "" {
 		group.Title = strings.TrimSpace(fmt.Sprint(entry["title"]))
 	}
+	if len(group.SourceIDs) == 0 {
+		group.SourceIDs = bindingStringSlice(entry["source_ids"])
+	}
 	return group
+}
+
+func bindingStringSlice(value any) []string {
+	values, ok := value.([]string)
+	if ok {
+		return append([]string(nil), values...)
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
 }
 
 func bindingFindDiagnosticEntry(plan *Plan, key, groupUID string) (map[string]any, bool) {
@@ -213,6 +246,7 @@ func bindingReplacePlanGroup(plan *Plan, groupUID string, rebuilt *Plan) *Plan {
 	}
 	bindingCollectPlanSourceIDs(normalized, affectedSourceIDs)
 	plan.Actions = append(keptActions, normalized.Actions...)
+	bindingMergeDuplicateRenameWorkDirs(plan)
 	plan.Skipped = bindingMergeSkipped(plan.Skipped, normalized.Skipped, affectedSourceIDs)
 	if plan.Diagnostics == nil {
 		plan.Diagnostics = map[string]any{}
@@ -234,6 +268,89 @@ func bindingReplacePlanGroup(plan *Plan, groupUID string, rebuilt *Plan) *Plan {
 		removedActionIDs,
 	)
 	return plan
+}
+
+// bindingMergeDuplicateRenameWorkDirs 补齐完整规划的“同作品目录归并”。
+// 手动匹配只局部重建一个组，追加回原计划后可能才与已有组产生相同目标。
+func bindingMergeDuplicateRenameWorkDirs(plan *Plan) {
+	if plan == nil {
+		return
+	}
+	winners := make(map[string]*moplan.PlanAction)
+	type cleanupSpec struct {
+		sourceID       string
+		sourceName     string
+		sourceParentID string
+		dependsOn      []string
+	}
+	cleanups := make([]cleanupSpec, 0)
+	for i := range plan.Actions {
+		action := &plan.Actions[i]
+		if action.Kind != moplan.ActionKindRelocate || action.Status == "skipped" ||
+			action.Metadata == nil || fmt.Sprint(action.Metadata["kind_label"]) != "dir_rename" {
+			continue
+		}
+		targetKey := action.TargetParentID + "\x00" + action.TargetName
+		winner := winners[targetKey]
+		if winner == nil {
+			winners[targetKey] = action
+			continue
+		}
+		losingDirID := action.SourceID
+		winningDirID := winner.SourceID
+		if losingDirID == "" || winningDirID == "" || losingDirID == winningDirID {
+			continue
+		}
+		action.Status = "skipped"
+		action.Error = fmt.Sprintf("作品已在「%s」整理，文件已自动并入", winner.SourceName)
+		cleanup := cleanupSpec{
+			sourceID:       losingDirID,
+			sourceName:     action.SourceName,
+			sourceParentID: action.SourceParentID,
+		}
+		for j := range plan.Actions {
+			child := &plan.Actions[j]
+			if child == action || child == winner || child.Status == "skipped" {
+				continue
+			}
+			child.DependsOn = bindingReplaceDependency(child.DependsOn, action.ID, winner.ID)
+			if child.TargetParentID == losingDirID {
+				child.TargetParentID = winningDirID
+				if winner.ID != "" && !slices.Contains(child.DependsOn, winner.ID) {
+					child.DependsOn = append(child.DependsOn, winner.ID)
+				}
+			}
+			if child.Kind == moplan.ActionKindRelocate && child.SourceParentID == losingDirID && child.ID != "" {
+				cleanup.dependsOn = append(cleanup.dependsOn, child.ID)
+			}
+		}
+		cleanups = append(cleanups, cleanup)
+	}
+	for _, cleanup := range cleanups {
+		plan.Actions = append(plan.Actions, moplan.PlanAction{
+			ID:             fmt.Sprintf("a%d", bindingNextActionSeq(plan.Actions)+1),
+			Kind:           moplan.ActionKindDeleteEmptyDir,
+			SourceID:       cleanup.sourceID,
+			SourceName:     cleanup.sourceName,
+			SourceParentID: cleanup.sourceParentID,
+			Reason:         fmt.Sprintf("同作品归并后清理空目录: %s", cleanup.sourceName),
+			Confidence:     1,
+			DependsOn:      cleanup.dependsOn,
+		})
+	}
+}
+
+func bindingReplaceDependency(values []string, oldID, newID string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == oldID {
+			value = newID
+		}
+		if value != "" && !slices.Contains(result, value) {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 // bindingCollectPlanSourceIDs 收集局部重建实际涉及的源文件。

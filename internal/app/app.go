@@ -29,6 +29,7 @@ import (
 	"litepan/internal/settings"
 	"litepan/internal/store"
 	"litepan/internal/strm"
+	"litepan/internal/strmdelete"
 	"litepan/internal/upload"
 )
 
@@ -53,6 +54,7 @@ type App struct {
 	offlineDownloads *offlinedownload.Service
 	playback         *playback.Service
 	strm             *strm.Service
+	strmDelete       *strmdelete.Service
 	mediaOrganize    *mediaorganize.Service
 	automation       *automation.Service
 	fuse             *fusemount.Service
@@ -136,6 +138,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		offlineDownloads: svc.offlineDownloads,
 		playback:         svc.playback,
 		strm:             svc.strm,
+		strmDelete:       svc.strmDelete,
 		mediaOrganize:    svc.mediaOrganize,
 		automation:       svc.automation,
 		fuse:             svc.fuse,
@@ -158,6 +161,9 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if a.strm != nil {
 		a.strm.Start(ctx)
+	}
+	if a.strmDelete != nil {
+		a.strmDelete.Start(ctx)
 	}
 	if a.cacheRetention != nil {
 		a.cacheRetention.Start(ctx)

@@ -50,6 +50,7 @@ type Server struct {
 	handler  *webdav.Handler
 	configs  domain.ConfigRepository
 	wc       *webdavCache
+	auth     *authCache
 }
 
 type webDAVHandlerError struct {
@@ -97,6 +98,7 @@ func New(d Deps) *Server {
 		handler:  h,
 		configs:  d.Configs,
 		wc:       wc,
+		auth:     newAuthCache(),
 	}
 }
 
@@ -292,11 +294,8 @@ func (s *Server) checkCredentials(ctx context.Context, username, password string
 			storedPass = strings.TrimSpace(v)
 		}
 	}
-	if username != storedUser {
-		return false
-	}
 	if strings.HasPrefix(storedPass, "pbkdf2:") || strings.HasPrefix(storedPass, "scrypt:") {
-		return security.CheckPasswordHash(storedPass, password)
+		return s.auth.verify(storedUser, storedPass, username, password, security.CheckPasswordHash)
 	}
 	return false
 }

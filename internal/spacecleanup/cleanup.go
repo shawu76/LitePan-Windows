@@ -118,7 +118,7 @@ func (s *Service) cleanupOne(ctx context.Context, item planItem) CleanupItemResu
 		result, err = s.cleanupFuseCache(ctx, item)
 	case kindCoverSession:
 		result, err = s.cleanupCoverSession(item)
-	case kindDatabaseRows, kindDatabaseTables:
+	case kindDatabaseRows, kindNotifications, kindDatabaseTables:
 		result, err = s.cleanupDatabaseGarbage(ctx, item)
 	case kindDatabase:
 		result, err = s.cleanupDatabase(ctx, item)
@@ -149,9 +149,12 @@ func (s *Service) cleanupDatabaseGarbage(ctx context.Context, item planItem) (Cl
 		return result, nil
 	}
 	result.Status = "cleaned"
-	if item.Kind == kindDatabaseTables {
+	switch item.Kind {
+	case kindDatabaseTables:
 		result.Message = fmt.Sprintf("已移除 %d 张废弃表", count)
-	} else {
+	case kindNotifications:
+		result.Message = fmt.Sprintf("已清理 %d 条历史已读通知", count)
+	default:
 		result.Message = fmt.Sprintf("已清理 %d 条无主记录", count)
 	}
 	return result, nil

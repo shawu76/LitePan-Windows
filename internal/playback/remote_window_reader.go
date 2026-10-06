@@ -339,7 +339,7 @@ func (r *remoteWindowReader) readRangeOnce(ctx context.Context, off int64, dest 
 		}
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			_ = resp.Body.Close()
-			newLink, refreshed, refreshErr := r.lh.refreshAfterFailure(ctx, link)
+			newLink, refreshed, refreshErr := r.lh.refreshAfterFailure(ctx, link, resp.StatusCode)
 			if refreshErr != nil {
 				return 0, refreshErr
 			}

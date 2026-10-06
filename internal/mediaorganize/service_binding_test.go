@@ -1,10 +1,33 @@
 package mediaorganize
 
 import (
+	"context"
+	"slices"
+	"strings"
 	"testing"
 
+	"litepan/internal/domain"
+	"litepan/internal/mediaorganize/classification"
 	"litepan/internal/mediaorganize/moplan"
+	"litepan/internal/mediaorganize/planner"
 )
+
+type bindingClassificationStub struct{}
+
+func (bindingClassificationStub) Available() bool                 { return true }
+func (bindingClassificationStub) RootDirectories(string) []string { return []string{"电视剧"} }
+func (bindingClassificationStub) Classify(context.Context, classification.Request) (classification.Decision, error) {
+	return classification.Decision{
+		Applied: true, Matched: true, Template: "media_type", Category: "电视剧",
+		RelativeSegments: []string{"电视剧"},
+	}, nil
+}
+
+type bindingFS struct{ dirs map[string][]domain.FileItem }
+
+func (f bindingFS) List(_ context.Context, _ int64, parentID string, _ bool) ([]domain.FileItem, error) {
+	return append([]domain.FileItem(nil), f.dirs[parentID]...), nil
+}
 
 func TestBindingReplacePlanGroupRebuildsSingleGroup(t *testing.T) {
 	uid := "tv|show1|旧目录|旧标题"
@@ -247,5 +270,119 @@ func TestBindingReplacePlanGroupWithoutOldActionsClearsOldSkipped(t *testing.T) 
 	groups := bindingMapSlice(got.Diagnostics["groups"])
 	if len(groups) != 1 || groups[0]["title"] != "Matched" {
 		t.Fatalf("重建后的 groups 不正确: %+v", groups)
+	}
+}
+
+func TestBindingReplacePlanGroupMergesRenameTVSeasonsIntoExistingWorkDir(t *testing.T) {
+	oldUID := "tv|show2025|我叫赵甲第 (2025)|我叫赵甲第2"
+	plan := &Plan{
+		Actions: []moplan.PlanAction{
+			{
+				ID: "a1", Kind: moplan.ActionKindRelocate,
+				SourceID: "show2022", SourceName: "我叫赵甲第 (2022)", SourceParentID: "root",
+				TargetParentID: "root", TargetName: "我叫赵甲第 (2022) {tmdb-196615}",
+				Metadata: map[string]any{"kind_label": "dir_rename", "group_uid": "tv|show2022|我叫赵甲第 (2022)|我叫赵甲第"},
+			},
+			{
+				ID: "a2", Kind: moplan.ActionKindEnsureDir,
+				TargetParentID: "show2022", TargetName: "Season 01", DependsOn: []string{"a1"},
+			},
+		},
+		Diagnostics: map[string]any{
+			"needs_match": []map[string]any{{"group_uid": oldUID}},
+		},
+	}
+	rebuilt := &Plan{
+		Actions: []moplan.PlanAction{
+			{
+				ID: "a1", Kind: moplan.ActionKindRelocate,
+				SourceID: "show2025", SourceName: "我叫赵甲第 (2025)", SourceParentID: "root",
+				TargetParentID: "root", TargetName: "我叫赵甲第 (2022) {tmdb-196615}",
+				Metadata: map[string]any{"kind_label": "dir_rename", "group_uid": oldUID},
+			},
+			{
+				ID: "a2", Kind: moplan.ActionKindEnsureDir,
+				TargetParentID: "show2025", TargetName: "Season 02", DependsOn: []string{"a1"},
+			},
+			{
+				ID: "a3", Kind: moplan.ActionKindRelocate,
+				SourceID: "s02e01", SourceParentID: "show2025", TargetParentID: "ref:a2",
+				TargetName: "我叫赵甲第 (2022) S02E01.mkv", DependsOn: []string{"a1", "a2"},
+				Metadata: map[string]any{"group_uid": oldUID, "media_kind": "tv"},
+			},
+		},
+		Diagnostics: map[string]any{},
+	}
+
+	got := bindingReplacePlanGroup(plan, oldUID, rebuilt)
+	var losingRename, season2, episode, cleanup *moplan.PlanAction
+	for i := range got.Actions {
+		action := &got.Actions[i]
+		switch {
+		case action.Kind == moplan.ActionKindRelocate && action.SourceID == "show2025":
+			losingRename = action
+		case action.TargetName == "Season 02":
+			season2 = action
+		case action.SourceID == "s02e01":
+			episode = action
+		case action.Kind == moplan.ActionKindDeleteEmptyDir && action.SourceID == "show2025":
+			cleanup = action
+		}
+	}
+	if losingRename == nil || losingRename.Status != "skipped" {
+		t.Fatalf("第二个同作品目录改名应转为归并: %+v", losingRename)
+	}
+	if season2 == nil || season2.TargetParentID != "show2022" || !slices.Contains(season2.DependsOn, "a1") {
+		t.Fatalf("Season 02 应创建在已匹配的作品目录中: %+v", season2)
+	}
+	if episode == nil || !strings.HasPrefix(episode.TargetParentID, "ref:") {
+		t.Fatalf("第二季文件应放入 Season 02: %+v", episode)
+	}
+	if cleanup == nil || !slices.Contains(cleanup.DependsOn, episode.ID) {
+		t.Fatalf("归并后应在文件迁移完成后清理旧目录: %+v", cleanup)
+	}
+}
+
+func TestManualMatchPlannerKeepsClassificationForMove(t *testing.T) {
+	fs := bindingFS{dirs: map[string][]domain.FileItem{
+		"root":     {{ID: "show2025", Name: "我叫赵甲第 (2025)", IsDir: true}},
+		"show2025": {{ID: "s02e01", Name: "我叫赵甲第2.2025.S02E01.mkv"}},
+	}}
+	p := planner.New(
+		context.Background(), fs, 1,
+		planner.TaskConfig{
+			TargetDirectoryID: "root", TargetRootID: "新目录", ActionType: "move",
+			MediaType: "auto", RenameMarker: "tmdb", UseTMDB: true, Recursive: true,
+		},
+		planner.Settings{"mo_tmdb_api_key": "test-key"},
+		"task-test", nil, func(string) {}, nil, func() error { return nil },
+	)
+	svc := &Service{classification: bindingClassificationStub{}}
+	svc.configureManualMatchPlanner(p)
+
+	plan, err := p.ReplanMatchedGroup(planner.ManualMatchGroup{
+		GroupUID: "tv|show2025|我叫赵甲第 (2025)|我叫赵甲第2", MediaKind: "tv",
+		DirID: "show2025", DirName: "我叫赵甲第 (2025)", Title: "我叫赵甲第2", SourceIDs: []string{"s02e01"},
+	}, map[string]any{
+		"id": 196615, "name": "我叫赵甲第", "first_air_date": "2022-03-31", "media_type": "tv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var category, work *moplan.PlanAction
+	for i := range plan.Actions {
+		action := &plan.Actions[i]
+		if action.Kind == moplan.ActionKindEnsureDir && action.TargetName == "电视剧" {
+			category = action
+		}
+		if action.Kind == moplan.ActionKindEnsureDir && action.Metadata["is_work_dir"] == true {
+			work = action
+		}
+	}
+	if category == nil {
+		t.Fatalf("人工匹配局部重建应保留分类目录: %+v", plan.Actions)
+	}
+	if work == nil || work.TargetParentID != "ref:"+category.ID {
+		t.Fatalf("作品目录应落在电视剧分类下: category=%+v work=%+v", category, work)
 	}
 }

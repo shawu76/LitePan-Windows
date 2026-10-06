@@ -417,6 +417,59 @@ func TestDetectSameWorkDirConflicts(t *testing.T) {
 	_ = hasDelete
 }
 
+func TestDetectSameWorkDirConflictsKeepsSeasonFolder(t *testing.T) {
+	p := newTestPlanner(nil, nil, "root")
+	p.SetScannedDirNames(map[string]string{"show2025": "我叫赵甲第 (2025)"})
+	p.SetActions([]moplan.PlanAction{
+		{
+			ID: "rename2022", Kind: moplan.ActionKindRelocate,
+			SourceID: "show2022", SourceName: "我叫赵甲第 (2022) {tmdb-196615}",
+			SourceParentID: "root", TargetParentID: "root",
+			TargetName: "我叫赵甲第 (2022) {tmdb-196615}",
+			Metadata:   map[string]any{"kind_label": "dir_rename"},
+		},
+		{
+			ID: "rename2025", Kind: moplan.ActionKindRelocate,
+			SourceID: "show2025", SourceName: "我叫赵甲第 (2025)",
+			SourceParentID: "root", TargetParentID: "root",
+			TargetName: "我叫赵甲第 (2022) {tmdb-196615}",
+			Metadata:   map[string]any{"kind_label": "dir_rename"},
+		},
+		{
+			ID: "season2", Kind: moplan.ActionKindEnsureDir,
+			TargetParentID: "show2025", TargetName: "Season 02",
+			Metadata: map[string]any{"is_season_dir": true, "season_index": 2},
+		},
+		{
+			ID: "episode2", Kind: moplan.ActionKindRelocate,
+			SourceID: "s02e01", SourceName: "我叫赵甲第2.2025.S02E01.mkv",
+			SourceParentID: "show2025", TargetParentID: "ref:season2",
+			TargetName: "我叫赵甲第 (2022) S02E01.mkv", DependsOn: []string{"season2"},
+		},
+	})
+
+	planner.DetectSameWorkDirConflicts(p)
+	actions := p.Actions()
+	if actions[1].Status != "skipped" {
+		t.Fatalf("2025 源目录应并入已命名的 2022 作品目录: %+v", actions[1])
+	}
+	if actions[2].TargetParentID != "show2022" || !containsString(actions[2].DependsOn, "rename2022") {
+		t.Fatalf("Season 02 应改挂到胜出作品目录并等待其重命名: %+v", actions[2])
+	}
+	if actions[3].TargetParentID != "ref:season2" {
+		t.Fatalf("第二季文件应保留 Season 02 目标层级: %+v", actions[3])
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTMDBAmbiguitySkipsGroup(t *testing.T) {
 	fs := &mockFS{dirs: map[string][]domain.FileItem{
 		"root": {

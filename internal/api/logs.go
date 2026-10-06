@@ -162,9 +162,7 @@ func toLogDTO(e logx.Entry, id int) logEntryDTO {
 		ModuleName:  groupName,
 		ModuleColor: color,
 		Message:     e.Message,
-	}
-	if e.Level >= logx.LevelError {
-		dto.Details = e.Details
+		Details:     e.Details,
 	}
 	if e.AccountID != nil {
 		s := stringifyAny(e.AccountID)

@@ -3,6 +3,7 @@ import { http } from "./client";
 export const NOTIFICATION_CATEGORY_CACHE_SCOPE_WARN = "cache_scope_warn";
 export const NOTIFICATION_CATEGORY_STRM_SCAN_WARN = "strm_scan_warn";
 export const NOTIFICATION_CATEGORY_STRM_SCRAPE_WARN = "strm_scrape_warn";
+export const NOTIFICATION_CATEGORY_STRM_DELETE_CONFIRM = "strm_delete_confirm";
 
 const STRM_SCAN_DETAIL_SEP = "\n---detail---\n";
 
@@ -68,6 +69,10 @@ export function isStrmScanWarnNotification(item: NotificationItem): boolean {
 
 export function isStrmScrapeWarnNotification(item: NotificationItem): boolean {
   return item.category === NOTIFICATION_CATEGORY_STRM_SCRAPE_WARN;
+}
+
+export function isStrmDeleteConfirmNotification(item: NotificationItem): boolean {
+  return item.category === NOTIFICATION_CATEGORY_STRM_DELETE_CONFIRM && (item.ref_id ?? 0) > 0;
 }
 
 function parseFailureDetails<T>(message: string): { summary: string; items: T[] } {

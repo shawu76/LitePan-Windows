@@ -79,27 +79,33 @@ func (s *Service) serveStream(w http.ResponseWriter, r *http.Request, req Reques
 	rangeHdr := strings.TrimSpace(r.Header.Get("Range"))
 	if rangeHdr != "" {
 		if size > 0 {
-			start, end, perr := parseSingleRange(rangeHdr, size)
+			ranges, perr := parseRanges(rangeHdr, size)
 			if perr != nil {
-				if size > 0 {
-					w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
-				}
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
 				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 				return nil
 			}
-			writeStreamHeaders(w, streamHeaders{
+			headers := streamHeaders{
 				contentType:        ctype,
 				etag:               etag,
 				contentDisposition: disp,
-				contentLength:      end - start + 1,
-				contentRange:       fmt.Sprintf("bytes %d-%d/%d", start, end, size),
 				acceptRanges:       true,
 				modTime:            modTime,
-			})
-			w.WriteHeader(http.StatusPartialContent)
-			return s.streamUpstreamBody(r.Context(), w, lh, start, end, partSize)
+			}
+			if len(ranges) > 1 {
+				return s.streamMultipartRanges(w, r, lh, ranges, size, partSize, headers)
+			}
+			if len(ranges) == 1 {
+				ra := ranges[0]
+				headers.contentLength = ra.length()
+				headers.contentRange = ra.contentRange(size)
+				writeStreamHeaders(w, headers)
+				w.WriteHeader(http.StatusPartialContent)
+				return s.streamUpstreamBody(r.Context(), w, lh, ra.start, ra.end, partSize)
+			}
+		} else {
+			return s.passthrough(w, r, req, res, ua)
 		}
-		return s.passthrough(w, r, req, res, ua)
 	}
 
 	if size > 0 {

@@ -117,6 +117,24 @@ func TestEnhanceValidatesAndCachesResult(t *testing.T) {
 	}
 }
 
+func TestValidateResultsRejectsSeasonConflictingWithCandidate(t *testing.T) {
+	candidateSeason := 8
+	modelSeason := 1
+	items := validateResults([]recognition.Work{{
+		WorkID:          "work_1",
+		CandidateSeason: &candidateSeason,
+	}}, []recognition.WorkResult{{
+		WorkID:     "work_1",
+		Recognized: true,
+		Title:      "绝望主妇",
+		MediaType:  "tv",
+		Season:     &modelSeason,
+	}})
+	if len(items) != 1 || items[0].Season != nil {
+		t.Fatalf("AI 季号与明确候选季号冲突时应丢弃 AI 季号: %+v", items)
+	}
+}
+
 func TestEnhanceReportsBatchProgress(t *testing.T) {
 	svc := newTestService(t, func(_ *http.Request) (*http.Response, error) {
 		return chatHTTPResponse(t, `{"items":[{"work_id":"work_1","recognized":true,"title":"千与千寻","year":2001,"media_type":"movie"}]}`), nil

@@ -69,7 +69,7 @@ func (d *Driver) Init(ctx context.Context) error {
 		d.client = httpx.NewClient(httpx.ClientOptions{Timeout: 60 * time.Second})
 	}
 	if d.uploadClient == nil {
-		d.uploadClient = httpx.NewStreamingClient(d.client, 60*time.Second)
+		d.uploadClient = httpx.NewUploadClient(d.client, 60*time.Second, config.UploadUseHTTP2)
 	}
 	authorization := d.currentAuthorization()
 	if authorization == "" {

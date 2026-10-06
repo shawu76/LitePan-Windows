@@ -23,6 +23,7 @@ const (
 	asyncCopyStatusFail = "3"
 	downloadPartSize    = 10 * 1024 * 1024
 	downloadConcurrency = 3
+	transferPartSize    = 64 * 1024 * 1024
 )
 
 func (d *Driver) ResolveDownload(ctx context.Context, req driver.DownloadRequest) (*domain.DownloadInfo, error) {
@@ -42,10 +43,11 @@ func (d *Driver) ResolveDownload(ctx context.Context, req driver.DownloadRequest
 		mode = domain.DownloadProxy
 	}
 	return &domain.DownloadInfo{
-		URL:         out.DownloadURL,
-		Mode:        mode,
-		ChunkSize:   downloadPartSize,
-		Concurrency: downloadConcurrency,
+		URL:               out.DownloadURL,
+		Mode:              mode,
+		ChunkSize:         downloadPartSize,
+		Concurrency:       downloadConcurrency,
+		TransferChunkSize: transferPartSize,
 	}, nil
 }
 

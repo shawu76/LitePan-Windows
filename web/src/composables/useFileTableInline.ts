@@ -8,6 +8,9 @@ export type ContextMenuItem = {
   action: string;
   label: string;
   danger?: boolean;
+  accessoryAction?: string;
+  accessoryIcon?: string;
+  accessoryTitle?: string;
 };
 
 export function useFileTableInline(options: {
@@ -30,6 +33,10 @@ export function useFileTableInline(options: {
   nameAlignFile: (file: FileItem) => void;
   coverExtractEnabled: Ref<boolean>;
   coverExtractFile: (file: FileItem) => void;
+  shareSupported: Ref<boolean>;
+  shareManageSupported: Ref<boolean>;
+  createShare: (files: FileItem[]) => void;
+  manageShares: () => void;
 }) {
   const renameInputRef = ref<HTMLInputElement | null>(null);
   const createFolderInputRef = ref<HTMLInputElement | null>(null);
@@ -123,7 +130,7 @@ export function useFileTableInline(options: {
     const items = contextMenuItemsFor(file);
     if (!items.length) return;
 
-    const menuWidth = 156;
+    const menuWidth = options.shareSupported.value ? 196 : 156;
     const menuHeight = items.length * 38 + 14;
     contextMenu.value = {
       open: true,
@@ -144,6 +151,15 @@ export function useFileTableInline(options: {
       items.push({ action: "name-align", label: "命名对齐" });
     }
     const useBatchActions = options.selectedIds.value.length > 1 && options.selectedIds.value.includes(fileKey(file));
+    if (options.shareSupported.value) {
+      items.push({
+        action: "share-create",
+        label: useBatchActions ? `分享已选 ${options.selectedIds.value.length} 项` : "分享",
+        accessoryAction: options.shareManageSupported.value ? "share-manage" : undefined,
+        accessoryIcon: options.shareManageSupported.value ? "hand-list" : undefined,
+        accessoryTitle: options.shareManageSupported.value ? "分享管理" : undefined,
+      });
+    }
     items.push(
       { action: "rename", label: "重命名" },
       { action: useBatchActions ? "batch-delete" : "delete", label: useBatchActions ? "批量删除" : "删除", danger: true },
@@ -257,6 +273,13 @@ export function useFileTableInline(options: {
     if (action === "download") options.downloadFile(file);
     if (action === "name-align") options.nameAlignFile(file);
     if (action === "cover-extract") options.coverExtractFile(file);
+    if (action === "share-create") {
+      const useSelection = options.selectedIds.value.length > 1 && options.selectedIds.value.includes(fileKey(file));
+      options.createShare(useSelection
+        ? options.files.value.filter((item) => options.selectedIds.value.includes(fileKey(item)))
+        : [file]);
+    }
+    if (action === "share-manage") options.manageShares();
     if (action === "rename") void startInlineRename(file);
     if (action === "delete") void startInlineDelete(file);
     if (action === "move") options.moveFile(file);

@@ -28,7 +28,7 @@ const aiDraft = reactive<Record<string, string>>({
 });
 
 const defaultInstance = computed(() => aiConfig.value.items.find((item) => item.default) || null);
-const activeModel = computed(() => defaultInstance.value?.model || "");
+const activeConfigName = computed(() => defaultInstance.value?.name || "");
 const selectedInstance = computed(() =>
   aiConfig.value.items.find((item) => item.id === aiSelectedID.value) || null,
 );
@@ -258,7 +258,7 @@ function configCompleteFromInstances(items: AIOrganizeInstanceUpdate[]) {
       driver="目录整理 · 低置信作品补判"
       logo-src="/logos/AI.png"
       logo-alt="AI"
-      :stat-value="activeModel || '待配置'"
+      :stat-value="activeConfigName || '待配置'"
       :compact-stat="true"
     >
       <template #toggle>
@@ -295,7 +295,7 @@ function configCompleteFromInstances(items: AIOrganizeInstanceUpdate[]) {
       v-model="aiDraft"
       :open="aiOpen"
       title="AI 辅助识别 · 模型设置"
-      caption="AI 模型配置"
+      caption=""
       icon="robot"
       :subtitle="selectedInstance ? (selectedInstance.default ? '默认激活 · 运行时使用' : '备用配置') : ''"
       :items="workspaceItems"

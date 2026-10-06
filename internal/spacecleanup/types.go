@@ -33,6 +33,7 @@ const (
 	kindFuseCache      = "fuse_cache"
 	kindCoverSession   = "cover_session"
 	kindDatabaseRows   = "database_rows"
+	kindNotifications  = "read_notifications"
 	kindDatabaseTables = "database_tables"
 	kindDatabase       = "database"
 )

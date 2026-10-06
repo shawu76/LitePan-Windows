@@ -4,6 +4,9 @@ export type DropdownMenuItem = {
   icon?: string;
   danger?: boolean;
   disabled?: boolean;
+  accessoryAction?: string;
+  accessoryIcon?: string;
+  accessoryTitle?: string;
   type?: "action" | "divider" | "hint";
 };
 

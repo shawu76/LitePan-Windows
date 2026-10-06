@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"litepan/internal/domain"
 	"litepan/internal/driver"
@@ -24,7 +25,10 @@ import (
 )
 
 const (
-	uploadChunkSize         = 4 * 1024 * 1024
+	uploadDefaultChunkSize  = 4 * 1024 * 1024
+	uploadVIPChunkSize      = 16 * 1024 * 1024
+	uploadSVIPChunkSize     = 32 * 1024 * 1024
+	uploadPartConcurrency   = 3
 	uploadAppID             = "250528"
 	pathPCSLocate           = "/rest/2.0/pcs/file"
 	pathSuperfile2          = "/rest/2.0/pcs/superfile2"
@@ -115,7 +119,11 @@ func (d *Driver) UploadLocalFile(ctx context.Context, req driver.LocalUploadRequ
 	}
 	if !restored {
 		uploadutil.NotifyProgress(req.OnProgress, 0, fileSize, "正在计算文件校验值")
-		meta, err = prepareUploadMeta(ctx, localPath)
+		chunkSize, sizeErr := d.baiduUploadChunkSize(ctx)
+		if sizeErr != nil {
+			return nil, sizeErr
+		}
+		meta, err = prepareUploadMeta(ctx, localPath, chunkSize)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +212,28 @@ func (d *Driver) prepareUploadTarget(ctx context.Context, parentID, name, policy
 	}
 }
 
-func prepareUploadMeta(ctx context.Context, path string) (uploadMeta, error) {
+func (d *Driver) baiduUploadChunkSize(ctx context.Context) (int64, error) {
+	var info struct {
+		VIPType int `json:"vip_type"`
+	}
+	if err := d.apiCall(ctx, http.MethodGet, opUserInfo, nil, nil, &info); err != nil {
+		return 0, err
+	}
+	return baiduChunkSizeForVIP(info.VIPType), nil
+}
+
+func baiduChunkSizeForVIP(vipType int) int64 {
+	switch vipType {
+	case 2:
+		return uploadSVIPChunkSize
+	case 1:
+		return uploadVIPChunkSize
+	default:
+		return uploadDefaultChunkSize
+	}
+}
+
+func prepareUploadMeta(ctx context.Context, path string, chunkSize int64) (uploadMeta, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return uploadMeta{}, domain.Wrap(domain.CodeDriverError, err)
@@ -215,7 +244,10 @@ func prepareUploadMeta(ctx context.Context, path string) (uploadMeta, error) {
 	if err != nil {
 		return uploadMeta{}, domain.Wrap(domain.CodeDriverError, err)
 	}
-	meta := uploadMeta{size: info.Size(), chunkSize: uploadChunkSize}
+	if chunkSize <= 0 {
+		chunkSize = uploadDefaultChunkSize
+	}
+	meta := uploadMeta{size: info.Size(), chunkSize: chunkSize}
 	if meta.size == 0 {
 		emptyMD5 := md5.Sum(nil)
 		md5Hex := hex.EncodeToString(emptyMD5[:])
@@ -227,7 +259,7 @@ func prepareUploadMeta(ctx context.Context, path string) (uploadMeta, error) {
 	contentHash := md5.New()
 	sliceHash := md5.New()
 	var sliceRemain int64 = 256 * 1024
-	buf := make([]byte, uploadChunkSize)
+	buf := make([]byte, chunkSize)
 
 	for {
 		select {
@@ -392,33 +424,88 @@ func (d *Driver) uploadBaiduParts(
 	persistBaiduResumeState(onState, resume, meta)
 	defer persistBaiduResumeState(onState, resume, meta)
 
-	buf := make([]byte, meta.chunkSize)
+	pending := make([]int, 0, totalParts-len(resume.completedParts))
 	for partSeq := 0; partSeq < totalParts; partSeq++ {
-		chunkSize := partSize(meta, partSeq)
 		if _, ok := resume.completedParts[partSeq]; ok {
-			if _, err := f.Seek(int64(chunkSize), io.SeekCurrent); err != nil {
-				return domain.Wrap(domain.CodeDriverError, err)
-			}
 			uploadutil.NotifyProgress(onProgress, uploaded, meta.size, fmt.Sprintf("正在继续上传到百度网盘，分片（%d/%d）", partSeq+1, totalParts))
 			continue
 		}
-		chunk := buf[:chunkSize]
-		if _, err := io.ReadFull(f, chunk); err != nil {
-			return domain.Wrap(domain.CodeDriverError, err)
+		pending = append(pending, partSeq)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	type partResult struct {
+		seq  int
+		size int64
+		err  error
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int, len(pending))
+	results := make(chan partResult, len(pending))
+	for _, partSeq := range pending {
+		jobs <- partSeq
+	}
+	close(jobs)
+
+	progress := uploadutil.NewParallelProgress(uploaded, meta.size, onProgress, "正在上传到百度网盘（3 路并发）")
+	workerCount := min(uploadPartConcurrency, len(pending))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for partSeq := range jobs {
+				if workerCtx.Err() != nil {
+					return
+				}
+				chunkSize := partSize(meta, partSeq)
+				chunk := io.NewSectionReader(f, int64(partSeq)*meta.chunkSize, int64(chunkSize))
+				err := d.uploadBaiduPart(workerCtx, uploadHost, targetPath, uploadID, partSeq, chunk, int64(chunkSize), meta.blockList[partSeq], func(sent int64) {
+					progress.Update(partSeq, sent, int64(chunkSize))
+				})
+				results <- partResult{seq: partSeq, size: int64(chunkSize), err: err}
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	completedSincePersist := 0
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
 		}
-		if err := d.uploadBaiduPart(ctx, uploadHost, targetPath, uploadID, partSeq, chunk, meta.blockList[partSeq], uploaded, meta.size, totalParts, onProgress); err != nil {
-			return err
-		}
-		resume.completedParts[partSeq] = struct{}{}
-		uploaded += int64(len(chunk))
+		progress.Complete(result.seq, result.size)
+		resume.completedParts[result.seq] = struct{}{}
+		uploaded += result.size
 		if uploaded > meta.size {
 			uploaded = meta.size
 		}
 		resume.uploadedBytes = uploaded
-		if (partSeq+1)%baiduResumePersistEvery == 0 {
+		completedSincePersist++
+		if completedSincePersist >= baiduResumePersistEvery {
 			persistBaiduResumeState(onState, resume, meta)
+			completedSincePersist = 0
 		}
-		uploadutil.NotifyProgress(onProgress, uploaded, meta.size, fmt.Sprintf("正在上传到百度网盘，分片（%d/%d）", partSeq+1, totalParts))
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -446,31 +533,37 @@ func completedBytes(meta uploadMeta, completed map[int]struct{}) int64 {
 	return uploaded
 }
 
-func (d *Driver) uploadBaiduPart(ctx context.Context, uploadHost, targetPath, uploadID string, partSeq int, chunk []byte, expectedMD5 string, baseUploaded, totalSize int64, totalParts int, onProgress driver.UploadProgress) error {
+func (d *Driver) uploadBaiduPart(ctx context.Context, uploadHost, targetPath, uploadID string, partSeq int, chunk io.Reader, chunkSize int64, expectedMD5 string, onProgress func(sent int64)) error {
 	if err := d.beforeCall(ctx); err != nil {
 		return err
 	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", fmt.Sprintf("chunk-%d", partSeq))
-	if err != nil {
+	var envelope bytes.Buffer
+	writer := multipart.NewWriter(&envelope)
+	if _, err := writer.CreateFormFile("file", fmt.Sprintf("chunk-%d", partSeq)); err != nil {
 		return domain.Wrap(domain.CodeInternal, err)
 	}
-	if _, err := part.Write(chunk); err != nil {
-		return domain.Wrap(domain.CodeDriverError, err)
-	}
+	prefix := append([]byte(nil), envelope.Bytes()...)
 	if err := writer.Close(); err != nil {
 		return domain.Wrap(domain.CodeDriverError, err)
 	}
+	suffix := append([]byte(nil), envelope.Bytes()[len(prefix):]...)
 
-	progressMsg := fmt.Sprintf("正在上传到百度网盘，分片（%d/%d）", partSeq+1, totalParts)
-	payload := body.Bytes()
+	payloadSize := int64(len(prefix)+len(suffix)) + chunkSize
 	reader := &uploadutil.ReadProgress{
-		R:     bytes.NewReader(payload),
-		Base:  baseUploaded,
-		Total: totalSize,
+		R:     io.MultiReader(bytes.NewReader(prefix), chunk, bytes.NewReader(suffix)),
+		Total: payloadSize,
 		OnProgress: func(uploaded int64) {
-			uploadutil.NotifyProgress(onProgress, uploaded, totalSize, progressMsg)
+			if onProgress == nil {
+				return
+			}
+			sent := uploaded - int64(len(prefix))
+			if sent < 0 {
+				sent = 0
+			}
+			if sent > chunkSize {
+				sent = chunkSize
+			}
+			onProgress(sent)
 		},
 	}
 
@@ -486,12 +579,12 @@ func (d *Driver) uploadBaiduPart(ctx context.Context, uploadHost, targetPath, up
 	if err != nil {
 		return domain.Wrap(domain.CodeInternal, err)
 	}
-	req.ContentLength = int64(len(payload))
+	req.ContentLength = payloadSize
 	httpx.SetHeaders(req, map[string]string{
 		"User-Agent":     defaultUA,
 		"Accept":         "application/json, text/plain, */*",
 		"Content-Type":   writer.FormDataContentType(),
-		"Content-Length": strconv.Itoa(len(payload)),
+		"Content-Length": strconv.FormatInt(payloadSize, 10),
 	})
 	resp, data, err := httpx.Execute(d.uploadClient, req, httpx.DefaultReadLimit)
 	if err != nil {
@@ -514,7 +607,9 @@ func (d *Driver) uploadBaiduPart(ctx context.Context, uploadHost, targetPath, up
 	if got := strings.ToLower(strings.TrimSpace(out.MD5)); got != "" && got != strings.ToLower(expectedMD5) {
 		return domain.Errorf(domain.CodeDriverError, "百度上传分片 %d 校验失败", partSeq)
 	}
-	uploadutil.NotifyProgress(onProgress, baseUploaded+int64(len(chunk)), totalSize, progressMsg)
+	if onProgress != nil {
+		onProgress(chunkSize)
+	}
 	return nil
 }
 
@@ -590,7 +685,7 @@ func restoreBaiduUploadMeta(state map[string]any, parentID, requestedName string
 	}
 	chunkSize, ok := uploadutil.MapInt64(state["chunk_size"])
 	if !ok || chunkSize <= 0 {
-		chunkSize = uploadChunkSize
+		chunkSize = uploadDefaultChunkSize
 	}
 	blockList := parseStringList(state["block_list"])
 	if len(blockList) == 0 {

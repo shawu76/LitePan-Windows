@@ -226,7 +226,7 @@ func (r *sseRecorder) Flush() {
 func (r *sseRecorder) body() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.ResponseRecorder.Body.String()
+	return r.Body.String()
 }
 
 func TestStreamNotificationUnreadPushesCount(t *testing.T) {

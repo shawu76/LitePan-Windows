@@ -116,9 +116,13 @@ func (s *Service) Scan(ctx context.Context) (Report, error) {
 			for _, entry := range garbage {
 				kind, risk, selected := kindDatabaseRows, RiskSafe, true
 				reason := fmt.Sprintf("对应主数据已不存在，共 %d 条记录", entry.Count)
-				if entry.Kind == "deprecated" {
+				switch entry.Kind {
+				case "deprecated":
 					kind, risk, selected = kindDatabaseTables, RiskReview, false
 					reason = fmt.Sprintf("当前版本已不再使用，共 %d 张表、%d 条记录", strings.Count(entry.Detail, "、")+1, entry.Count)
+				case "notification":
+					kind = kindNotifications
+					reason = fmt.Sprintf("已经查看过的历史通知，共 %d 条；未读及待处理关联通知不会清理", entry.Count)
 				}
 				items = append(items, planItem{
 					Item: Item{

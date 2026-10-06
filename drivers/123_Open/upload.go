@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -27,6 +28,7 @@ const (
 
 	sliceResumePersistEvery  = 5
 	sliceProgressMinInterval = 250 * time.Millisecond
+	uploadSliceConcurrency   = 3
 )
 
 type uploadCreateData struct {
@@ -157,7 +159,7 @@ func (d *Driver) UploadLocalFile(ctx context.Context, req driver.LocalUploadRequ
 		persistPan123ResumeState(req.OnResumeState, resume)
 	}
 
-	if err := d.uploadFileSlices(ctx, localPath, targetName, fileSize, preuploadID, sliceSize, servers, req.OnProgress, resume, req.OnResumeState); err != nil {
+	if err := d.uploadFileSlices(ctx, localPath, fileSize, preuploadID, sliceSize, servers, req.OnProgress, resume, req.OnResumeState); err != nil {
 		return nil, err
 	}
 
@@ -255,7 +257,7 @@ func normalizeUploadServers(servers []any) []string {
 
 func (d *Driver) uploadFileSlices(
 	ctx context.Context,
-	localPath, fileName string,
+	localPath string,
 	fileSize int64,
 	preuploadID string,
 	sliceSize int64,
@@ -278,74 +280,100 @@ func (d *Driver) uploadFileSlices(
 		for n := range resume.completedSlices {
 			completed[n] = struct{}{}
 		}
-		defer func() {
-			resume.completedSlices = cloneCompletedSlices(completed)
-			persistPan123ResumeState(onState, resume)
-		}()
 	}
 	uploaded := uploadutil.UploadedBytesByParts(fileSize, sliceSize, completed)
+	progressMsg := "正在上传到123云盘Open"
+	progress := uploadutil.NewParallelProgress(uploaded, fileSize, onProgress, progressMsg)
 	if len(completed) > 0 {
-		uploadutil.NotifyProgress(onProgress, uploaded, fileSize, fmt.Sprintf("正在继续上传到123云盘Open，分片（%d/%d）", len(completed)+1, totalSlices))
+		uploadutil.NotifyProgress(onProgress, uploaded, fileSize, "正在继续上传到123云盘Open")
 	}
 
-	f, err := os.Open(localPath)
-	if err != nil {
-		return domain.Wrap(domain.CodeDriverError, err)
-	}
-	defer f.Close()
-
-	chunkBuf := make([]byte, sliceSize)
-
-	startSlice := 1
+	pending := make([]int, 0, totalSlices-len(completed))
 	for sliceNo := 1; sliceNo <= totalSlices; sliceNo++ {
 		if _, ok := completed[sliceNo]; !ok {
-			startSlice = sliceNo
-			break
+			pending = append(pending, sliceNo)
 		}
 	}
-	if startSlice > 1 {
-		if _, err := f.Seek(int64(startSlice-1)*sliceSize, io.SeekStart); err != nil {
-			return domain.Wrap(domain.CodeDriverError, err)
-		}
+	if len(pending) == 0 {
+		return nil
 	}
 
-	for sliceNo := startSlice; sliceNo <= totalSlices; sliceNo++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		if _, ok := completed[sliceNo]; ok {
-			continue
-		}
-
-		remain := fileSize - int64(sliceNo-1)*sliceSize
-		chunkLen := sliceSize
-		if remain < chunkLen {
-			chunkLen = remain
-		}
-		chunk := chunkBuf[:chunkLen]
-		if _, err := io.ReadFull(f, chunk); err != nil {
-			return domain.Wrap(domain.CodeDriverError, err)
-		}
-
-		sliceMD5 := md5.Sum(chunk)
-		baseUploaded := uploadutil.UploadedBytesByParts(fileSize, sliceSize, completed)
-		progressMsg := fmt.Sprintf("正在上传到123云盘Open，分片（%d/%d）", sliceNo, totalSlices)
-
-		if err := d.uploadSingleSlice(ctx, preuploadID, sliceNo, hex.EncodeToString(sliceMD5[:]), chunk, servers, baseUploaded, fileSize, onProgress, progressMsg); err != nil {
-			return err
-		}
-
-		completed[sliceNo] = struct{}{}
-		uploaded = uploadutil.UploadedBytesByParts(fileSize, sliceSize, completed)
-		if resume != nil && sliceNo%sliceResumePersistEvery == 0 {
-			resume.completedSlices = cloneCompletedSlices(completed)
-			persistPan123ResumeState(onState, resume)
-		}
-		uploadutil.NotifyProgress(onProgress, uploaded, fileSize, progressMsg)
+	workerCount := min(uploadSliceConcurrency, len(pending))
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int, len(pending))
+	for _, sliceNo := range pending {
+		jobs <- sliceNo
 	}
-	return nil
+	close(jobs)
+
+	var completedMu sync.Mutex
+	var firstErr error
+	var errOnce sync.Once
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			f, err := os.Open(localPath)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = domain.Wrap(domain.CodeDriverError, err)
+					cancel()
+				})
+				return
+			}
+			defer f.Close()
+
+			for sliceNo := range jobs {
+				if workerCtx.Err() != nil {
+					return
+				}
+				offset := int64(sliceNo-1) * sliceSize
+				chunkLen := min(sliceSize, fileSize-offset)
+				reader := io.NewSectionReader(f, offset, chunkLen)
+				hasher := md5.New()
+				if _, err := io.Copy(hasher, reader); err != nil {
+					errOnce.Do(func() {
+						firstErr = domain.Wrap(domain.CodeDriverError, err)
+						cancel()
+					})
+					return
+				}
+				if err := d.uploadSingleSliceReader(workerCtx, preuploadID, sliceNo, hex.EncodeToString(hasher.Sum(nil)), reader, chunkLen, servers, func(sent int64) {
+					progress.Update(sliceNo, sent, chunkLen)
+				}); err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						cancel()
+					})
+					return
+				}
+
+				completedMu.Lock()
+				completed[sliceNo] = struct{}{}
+				completedCount := len(completed)
+				if resume != nil && completedCount%sliceResumePersistEvery == 0 {
+					resume.completedSlices = cloneCompletedSlices(completed)
+					persistPan123ResumeState(onState, resume)
+				}
+				completedMu.Unlock()
+				progress.Complete(sliceNo, chunkLen)
+			}
+		}()
+	}
+	workers.Wait()
+
+	completedMu.Lock()
+	if resume != nil {
+		resume.completedSlices = cloneCompletedSlices(completed)
+		persistPan123ResumeState(onState, resume)
+	}
+	completedMu.Unlock()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func cloneCompletedSlices(src map[int]struct{}) map[int]struct{} {
@@ -356,16 +384,15 @@ func cloneCompletedSlices(src map[int]struct{}) map[int]struct{} {
 	return out
 }
 
-func (d *Driver) uploadSingleSlice(
+func (d *Driver) uploadSingleSliceReader(
 	ctx context.Context,
 	preuploadID string,
 	sliceNo int,
 	sliceMD5 string,
-	chunk []byte,
+	chunk io.ReadSeeker,
+	chunkLen int64,
 	servers []string,
-	baseUploaded, fileSize int64,
-	onProgress driver.UploadProgress,
-	progressMsg string,
+	onSliceProgress func(sent int64),
 ) error {
 	maxAttempts := len(servers)
 	if maxAttempts < 3 {
@@ -378,7 +405,10 @@ func (d *Driver) uploadSingleSlice(
 		if attempt > 0 {
 			host = strings.TrimSuffix(servers[(sliceNo+attempt-1)%len(servers)], "/")
 		}
-		err := d.postUploadSlice(ctx, host, preuploadID, sliceNo, sliceMD5, chunk, baseUploaded, fileSize, onProgress, progressMsg)
+		if _, err := chunk.Seek(0, io.SeekStart); err != nil {
+			return domain.Wrap(domain.CodeDriverError, err)
+		}
+		err := d.postUploadSliceReader(ctx, host, preuploadID, sliceNo, sliceMD5, chunk, chunkLen, onSliceProgress)
 		if err == nil {
 			return nil
 		}
@@ -401,7 +431,7 @@ func (d *Driver) uploadSingleSlice(
 	return domain.Errorf(domain.CodeDriverError, "上传分片 %d 失败", sliceNo)
 }
 
-func buildSliceMultipartParts(preuploadID string, sliceNo int, sliceMD5 string, chunk []byte) (prefix, suffix []byte, contentType string, total int64) {
+func buildSliceMultipartEnvelope(preuploadID string, sliceNo int, sliceMD5 string) (prefix, suffix []byte, contentType string) {
 	boundary := fmt.Sprintf("----LitePan123Open%d", time.Now().UnixNano())
 	var pb bytes.Buffer
 	writeField := func(name, value string) {
@@ -413,9 +443,8 @@ func buildSliceMultipartParts(preuploadID string, sliceNo int, sliceMD5 string, 
 	fmt.Fprintf(&pb, "--%s\r\nContent-Disposition: form-data; name=\"slice\"; filename=\"slice-%d\"\r\nContent-Type: application/octet-stream\r\n\r\n", boundary, sliceNo)
 	prefix = append([]byte(nil), pb.Bytes()...)
 	suffix = []byte(fmt.Sprintf("\r\n--%s--\r\n", boundary))
-	total = int64(len(prefix) + len(chunk) + len(suffix))
 	contentType = fmt.Sprintf("multipart/form-data; boundary=%s", boundary)
-	return prefix, suffix, contentType, total
+	return prefix, suffix, contentType
 }
 
 type sliceByteCounter struct {
@@ -438,18 +467,19 @@ func (r *sliceCountingReader) Read(p []byte) (int, error) {
 func startSliceProgressReporter(
 	parent context.Context,
 	counter *sliceByteCounter,
-	baseUploaded, chunkLen, payloadLen, total int64,
-	onProgress driver.UploadProgress,
-	message string,
+	chunkLen int64,
+	onProgress func(sent int64),
 ) context.CancelFunc {
-	if onProgress == nil || chunkLen <= 0 || payloadLen <= 0 {
+	if onProgress == nil || chunkLen <= 0 {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(sliceProgressMinInterval)
 		defer ticker.Stop()
-		var lastUploaded int64 = -1
+		var lastSent int64 = -1
 		for {
 			select {
 			case <-ctx.Done():
@@ -459,40 +489,42 @@ func startSliceProgressReporter(
 				if sent <= 0 {
 					continue
 				}
-				uploaded := baseUploaded + sent*chunkLen/payloadLen
-				if uploaded > total {
-					uploaded = total
+				if sent > chunkLen {
+					sent = chunkLen
 				}
-				if uploaded == lastUploaded {
+				if sent == lastSent {
 					continue
 				}
-				lastUploaded = uploaded
-				uploadutil.NotifyProgress(onProgress, uploaded, total, message)
+				lastSent = sent
+				onProgress(sent)
 			}
 		}
 	}()
-	return cancel
+	return func() {
+		cancel()
+		// 分片完成后不允许旧回调再次加入 active，避免重复累计已完成字节。
+		<-done
+	}
 }
 
-func (d *Driver) postUploadSlice(
+func (d *Driver) postUploadSliceReader(
 	ctx context.Context,
 	server, preuploadID string,
 	sliceNo int,
 	sliceMD5 string,
-	chunk []byte,
-	baseUploaded, fileSize int64,
-	onProgress driver.UploadProgress,
-	progressMsg string,
+	chunk io.Reader,
+	chunkLen int64,
+	onProgress func(sent int64),
 ) error {
-	prefix, suffix, contentType, total := buildSliceMultipartParts(preuploadID, sliceNo, sliceMD5, chunk)
+	prefix, suffix, contentType := buildSliceMultipartEnvelope(preuploadID, sliceNo, sliceMD5)
 
 	var counter sliceByteCounter
-	stopProgress := startSliceProgressReporter(ctx, &counter, baseUploaded, int64(len(chunk)), total, fileSize, onProgress, progressMsg)
+	stopProgress := startSliceProgressReporter(ctx, &counter, chunkLen, onProgress)
 	defer stopProgress()
 
 	body := io.MultiReader(
 		bytes.NewReader(prefix),
-		&sliceCountingReader{r: bytes.NewReader(chunk), c: &counter},
+		&sliceCountingReader{r: chunk, c: &counter},
 		bytes.NewReader(suffix),
 	)
 
@@ -501,10 +533,10 @@ func (d *Driver) postUploadSlice(
 	if err != nil {
 		return domain.Wrap(domain.CodeInternal, err)
 	}
-	req.ContentLength = total
+	// 与 OpenList 的分片请求一致：HTTP/1.1 下使用 chunked 流式发送。
+	req.ContentLength = -1
 	req.Header.Set("Platform", "open_platform")
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Content-Length", strconv.FormatInt(total, 10))
 	req.Header.Set("User-Agent", httpx.DefaultUserAgent)
 	req.Header.Set("Authorization", "Bearer "+d.currentToken())
 
@@ -529,7 +561,9 @@ func (d *Driver) postUploadSlice(
 	if env.Code != 0 {
 		return mapAPIError(env.Code, env.Message)
 	}
-	uploadutil.NotifyProgress(onProgress, baseUploaded+int64(len(chunk)), fileSize, progressMsg)
+	if onProgress != nil {
+		onProgress(chunkLen)
+	}
 	return nil
 }
 

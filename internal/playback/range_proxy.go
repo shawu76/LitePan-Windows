@@ -39,6 +39,7 @@ type linkHolder struct {
 	skipRangeLimit bool
 	waitRangeLimit bool
 	refreshLeft    int
+	generation     int64
 }
 
 func (lh *linkHolder) snapshot() domain.DownloadInfo {
@@ -48,13 +49,19 @@ func (lh *linkHolder) snapshot() domain.DownloadInfo {
 }
 
 // refreshAfterFailure 避免同一个过期链接的并发 Range 各自重复刷新。
-func (lh *linkHolder) refreshAfterFailure(ctx context.Context, failed domain.DownloadInfo) (domain.DownloadInfo, bool, error) {
+// status 是触发刷新的上游状态码（传输层自身出错时为 0），只用于日志诊断。
+func (lh *linkHolder) refreshAfterFailure(ctx context.Context, failed domain.DownloadInfo, status int) (domain.DownloadInfo, bool, error) {
+	return lh.refreshVersion(ctx, failed, status, -1)
+}
+
+func (lh *linkHolder) refreshVersion(ctx context.Context, failed domain.DownloadInfo, status int, generation int64) (domain.DownloadInfo, bool, error) {
 	lh.mu.Lock()
 	defer lh.mu.Unlock()
-	if lh.link.URL != failed.URL {
+	if lh.link.URL != failed.URL || (generation >= 0 && lh.generation != generation) {
 		return lh.link, true, nil
 	}
 	if lh.refreshLeft <= 0 {
+		lh.logRefresh("上游临时地址刷新次数已用尽", failed.URL, status, false)
 		return lh.link, false, nil
 	}
 	lh.refreshLeft--
@@ -63,6 +70,8 @@ func (lh *linkHolder) refreshAfterFailure(ctx context.Context, failed domain.Dow
 		return lh.link, false, err
 	}
 	lh.link = res.Link
+	lh.generation++
+	lh.logRefresh("已刷新上游临时地址", res.Link.URL, status, true)
 	return lh.link, true, nil
 }
 
@@ -215,7 +224,7 @@ func (s *Service) pipeUpstreamRange(ctx context.Context, w io.Writer, lh *linkHo
 		resp, err := s.doRangeRequest(ctx, lh.accountID, link, start, end, lh.skipRangeLimit, lh.waitRangeLimit)
 		if err != nil {
 			if try == 0 && ctx.Err() == nil {
-				newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link)
+				newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link, 0)
 				if rerr != nil {
 					return rerr
 				}
@@ -228,7 +237,7 @@ func (s *Service) pipeUpstreamRange(ctx context.Context, w io.Writer, lh *linkHo
 		}
 		if shouldRefreshUpstreamStatus(resp.StatusCode) {
 			resp.Body.Close()
-			newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link)
+			newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link, resp.StatusCode)
 			if rerr != nil {
 				return rerr
 			}
@@ -274,7 +283,7 @@ func (s *Service) pipeUpstreamRange(ctx context.Context, w io.Writer, lh *linkHo
 		}
 		resp.Body.Close()
 		if written == 0 && try == 0 {
-			newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link)
+			newLink, refreshed, rerr := lh.refreshAfterFailure(ctx, link, resp.StatusCode)
 			if rerr != nil {
 				return rerr
 			}

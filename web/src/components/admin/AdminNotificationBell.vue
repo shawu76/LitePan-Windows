@@ -3,6 +3,7 @@ import SvgIcon from "@/components/icons/SvgIcon.vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import AppModal from "@/components/base/AppModal.vue";
 import { ackRetentionScopeWarn } from "@/api/cacheRetention";
+import { strmDeleteApi } from "@/api/cloudTools";
 import {
   deleteAllNotifications,
   deleteNotification,
@@ -10,6 +11,7 @@ import {
   isCacheScopeWarnNotification,
   isStrmScanWarnNotification,
   isStrmScrapeWarnNotification,
+  isStrmDeleteConfirmNotification,
   markAllNotificationsRead,
   markNotificationRead,
   parseStrmScanFailures,
@@ -53,6 +55,9 @@ const badgeText = computed(() => {
 
 const detailCanDismissScope = computed(() =>
   detailItem.value ? isCacheScopeWarnNotification(detailItem.value) : false,
+);
+const detailCanConfirmStrmDelete = computed(() =>
+  detailItem.value ? isStrmDeleteConfirmNotification(detailItem.value) : false,
 );
 
 interface NotificationFailureRow {
@@ -245,6 +250,20 @@ async function handleDismissScopeWarn() {
   }
 }
 
+async function handleStrmDelete(action: "confirm" | "cancel") {
+  const item = detailItem.value;
+  if (!item || detailBusy.value || !isStrmDeleteConfirmNotification(item)) return;
+  const pendingId = item.ref_id ?? 0;
+  detailBusy.value = true;
+  try {
+    await (action === "confirm" ? strmDeleteApi.confirm(pendingId) : strmDeleteApi.cancel(pendingId));
+    removeItem(item.id);
+    await refreshUnread();
+  } catch {
+    detailBusy.value = false;
+  }
+}
+
 function notifyListMessage(item: NotificationItem): string {
   if (isStrmScanWarnNotification(item)) {
     return parseStrmScanFailures(item.message).summary || item.message;
@@ -400,6 +419,25 @@ onUnmounted(() => {
           不再提示
         </button>
         <button
+          v-if="detailCanConfirmStrmDelete"
+          class="btn btn--secondary"
+          type="button"
+          :disabled="detailBusy"
+          @click="handleStrmDelete('cancel')"
+        >
+          保留远端文件
+        </button>
+        <button
+          v-if="detailCanConfirmStrmDelete"
+          class="btn btn--danger"
+          type="button"
+          :disabled="detailBusy"
+          @click="handleStrmDelete('confirm')"
+        >
+          确认删除源文件
+        </button>
+        <button
+          v-if="!detailCanConfirmStrmDelete"
           class="btn btn--danger"
           type="button"
           :disabled="detailBusy"

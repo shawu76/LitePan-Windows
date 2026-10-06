@@ -311,7 +311,7 @@ type chunkedRangeDownloadDriver struct {
 }
 
 func (d *chunkedRangeDownloadDriver) ResolveDownload(context.Context, driver.DownloadRequest) (*domain.DownloadInfo, error) {
-	return &domain.DownloadInfo{URL: d.serverURL, Size: d.size, ChunkSize: 1 << 20, Concurrency: 4}, nil
+	return &domain.DownloadInfo{URL: d.serverURL, Size: d.size, ChunkSize: 1 << 20, Concurrency: 4, TransferChunkSize: 1 << 20, TransferConcurrency: 4}, nil
 }
 
 func (d *blockingResumeDriver) Config() driver.Config      { return driver.Config{Name: "mock"} }
@@ -1505,7 +1505,7 @@ func TestBatchDeleteFailureDoesNotBlameRootDeletedBatch(t *testing.T) {
 	}
 }
 
-// 分片并发下载回归：支持 Range 的源返回 206，应按驱动 ChunkSize/Concurrency
+// 分片并发下载回归：支持 Range 的源返回 206，应按驱动 Transfer 参数
 // 分片并发拉取并拼出完整文件（1MB 分片下 8MB+123 字节产生 9 个分片）。
 func TestCrossTransferDownloadUsesConcurrentRanges(t *testing.T) {
 	const totalSize = int64(8<<20 + 123)

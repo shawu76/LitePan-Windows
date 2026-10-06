@@ -36,6 +36,10 @@ const props = defineProps<{
   nameAlignFile: (file: FileItem) => void;
   coverExtractEnabled: boolean;
   coverExtractFile: (file: FileItem) => void;
+  shareSupported: boolean;
+  shareManageSupported: boolean;
+  createShare: (files: FileItem[]) => void;
+  manageShares: () => void;
   dragActive?: boolean;
   activeDropTargetId?: string;
   dragUnlockedTargetId?: string;
@@ -78,6 +82,10 @@ const inline = useFileTableInline({
   nameAlignFile: (file) => props.nameAlignFile(file),
   coverExtractEnabled: toRef(props, "coverExtractEnabled"),
   coverExtractFile: (file) => props.coverExtractFile(file),
+  shareSupported: toRef(props, "shareSupported"),
+  shareManageSupported: toRef(props, "shareManageSupported"),
+  createShare: (files) => props.createShare(files),
+  manageShares: () => props.manageShares(),
 });
 
 const {

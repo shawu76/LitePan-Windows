@@ -465,7 +465,7 @@ func (c *Client) ImageURL(imagePath, size string) string {
 	return c.imageBase() + "/" + size + imagePath
 }
 
-// DownloadImage 下载 TMDB 图片。posterPath 形如 "/abc.jpg"；size 常用 w500 / original。
+// DownloadImage 按 size 下载 TMDB 图片，未指定尺寸时使用原图。
 func (c *Client) DownloadImage(ctx context.Context, posterPath, size string) ([]byte, error) {
 	posterPath = strings.TrimSpace(posterPath)
 	if posterPath == "" {
@@ -476,7 +476,7 @@ func (c *Client) DownloadImage(ctx context.Context, posterPath, size string) ([]
 	}
 	size = strings.TrimSpace(size)
 	if size == "" {
-		size = "w500"
+		size = "original"
 	}
 	endpoint := c.imageBase() + "/" + size + posterPath
 	client := c.http

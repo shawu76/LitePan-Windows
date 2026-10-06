@@ -22,7 +22,64 @@ func (h *Handler) authLogin(w http.ResponseWriter, r *http.Request) {
 		r.FormValue("username"),
 		r.FormValue("password"),
 		r.FormValue("remember") == "1",
+		r.FormValue("code"),
+		r.FormValue("challenge"),
 	)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeOK(w, result)
+}
+
+func (h *Handler) adminBeginTwoFactorSetup(w http.ResponseWriter, r *http.Request) {
+	var req adminauth.TwoFactorSetupRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	result, err := h.adminAuth.BeginTwoFactorSetup(r.Context(), req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeOK(w, result)
+}
+
+func (h *Handler) adminConfirmTwoFactorSetup(w http.ResponseWriter, r *http.Request) {
+	var req adminauth.TwoFactorConfirmRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	result, err := h.adminAuth.ConfirmTwoFactorSetup(r.Context(), req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeOK(w, result)
+}
+
+func (h *Handler) adminDisableTwoFactor(w http.ResponseWriter, r *http.Request) {
+	var req adminauth.TwoFactorVerifyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := h.adminAuth.DisableTwoFactor(r.Context(), req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeOK(w, map[string]any{})
+}
+
+func (h *Handler) adminRegenerateTwoFactorRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	var req adminauth.TwoFactorVerifyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	result, err := h.adminAuth.RegenerateRecoveryCodes(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
 		return

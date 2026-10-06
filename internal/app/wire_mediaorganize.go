@@ -25,11 +25,12 @@ func wireMediaOrganize(
 	classifier *classifyorganize.Service,
 ) *mediaorganize.Service {
 	return mediaorganize.NewService(mediaorganize.ServiceOptions{
-		Repo:     st.store.MediaOrganizeTasks,
-		Files:    files,
-		Settings: st.settings,
-		DataDir:  dataDir,
-		Log:      logs.For(logx.ModuleFileOp),
+		Repo:           st.store.MediaOrganizeTasks,
+		Files:          files,
+		Settings:       st.settings,
+		DataDir:        dataDir,
+		Log:            logs.For(logx.ModuleFileOp),
+		Classification: classifier,
 		Planner: plannerAdapter{
 			files:          files,
 			settings:       st.settings,

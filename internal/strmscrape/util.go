@@ -48,6 +48,8 @@ func pathEscape(p string) string {
 
 func anyString(v any) string {
 	switch t := v.(type) {
+	case nil:
+		return ""
 	case string:
 		return t
 	case fmt.Stringer:

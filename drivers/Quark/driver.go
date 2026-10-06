@@ -56,7 +56,7 @@ func (d *Driver) Init(ctx context.Context) error {
 		d.client = httpx.NewClient(httpx.ClientOptions{Timeout: 30 * time.Second})
 	}
 	if d.uploadClient == nil {
-		d.uploadClient = httpx.NewStreamingClient(d.client, 60*time.Second)
+		d.uploadClient = httpx.NewUploadClient(d.client, 60*time.Second, config.UploadUseHTTP2)
 	}
 	d.mu.Lock()
 	if d.cookie == "" {
@@ -152,4 +152,8 @@ var (
 	_ driver.ConnectionErrorExplainer = (*Driver)(nil)
 	_ driver.RequestIntervalConsumer  = (*Driver)(nil)
 	_ driver.QRLoginProvider          = (*Driver)(nil)
+	_ driver.ShareCapabilityProvider  = (*Driver)(nil)
+	_ driver.ShareCreator             = (*Driver)(nil)
+	_ driver.ShareLister              = (*Driver)(nil)
+	_ driver.ShareCanceller           = (*Driver)(nil)
 )

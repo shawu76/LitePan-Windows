@@ -1,4 +1,4 @@
-//go:build !fuse
+//go:build !fuse && !windows
 
 package fuse
 

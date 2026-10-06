@@ -62,11 +62,6 @@ func (s *Service) managedIDs() []int64 {
 	return out
 }
 
-func (s *Service) accountName(ctx context.Context, accountID int64) string {
-	name, _ := s.accountLabel(ctx, accountID)
-	return name
-}
-
 // scheduleLabel 拼出"账号名（驱动）"形式的日志标签。
 func scheduleLabel(name, driverType string) string {
 	if driverType == "" {

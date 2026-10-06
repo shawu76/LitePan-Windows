@@ -18,6 +18,7 @@ import (
 const (
 	downloadPartSize    = 10 * 1024 * 1024
 	downloadConcurrency = 3
+	transferPartSize    = 32 * 1024 * 1024
 )
 
 // insecureSchemeRe 匹配明文 http 前缀，用于把下载链接升级为 https。
@@ -71,15 +72,16 @@ func (d *Driver) ResolveDownload(ctx context.Context, req driver.DownloadRequest
 		forceProxy = true
 	}
 	return &domain.DownloadInfo{
-		URL:         downloadURL,
-		Headers:     headers,
-		Mode:        mode,
-		ForceProxy:  forceProxy,
-		Expiration:  downloadURLTTLSeconds * time.Second,
-		Size:        size,
-		FileName:    fileName,
-		ChunkSize:   downloadPartSize,
-		Concurrency: downloadConcurrency,
+		URL:               downloadURL,
+		Headers:           headers,
+		Mode:              mode,
+		ForceProxy:        forceProxy,
+		Expiration:        downloadURLTTLSeconds * time.Second,
+		Size:              size,
+		FileName:          fileName,
+		ChunkSize:         downloadPartSize,
+		Concurrency:       downloadConcurrency,
+		TransferChunkSize: transferPartSize,
 	}, nil
 }
 
@@ -140,7 +142,7 @@ func (d *Driver) RenameFile(ctx context.Context, fileID, newName string) error {
 	if err := uploadutil.ValidateFileName(name); err != nil {
 		return err
 	}
-	if id == d.rootID() || id == "0" || id == "/" {
+	if containsRoot([]string{id}, d.rootID()) {
 		return domain.Errorf(domain.CodeValidation, "根目录不支持重命名")
 	}
 	item, err := d.GetFileInfo(ctx, id)
@@ -257,7 +259,7 @@ func normalize189IDs(fileIDs []string) []string {
 
 func containsRoot(ids []string, root string) bool {
 	for _, id := range ids {
-		if id == root || id == "0" || id == "/" {
+		if id == root || id == "0" || id == "/" || id == syncRootID {
 			return true
 		}
 	}

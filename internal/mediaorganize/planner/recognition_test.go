@@ -177,6 +177,43 @@ func TestPlannerKeepsBuiltInEpisodesAfterAIIdentifiesLongSeries(t *testing.T) {
 	}
 }
 
+func TestPlannerKeepsExplicitSeasonWhenAIReportsDifferentSeason(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root": {{ID: "show", Name: "Desperate Housewives 合集", IsDir: true}},
+		"show": {{
+			ID: "ep817", Name: "Desperate.Housewives.S08E17.Women.and.Death.1080p.WEB-DL.x265.10bit.AAC.5.1-RCVR.mkv", Size: 1024,
+		}},
+	}}
+	year := 2004
+	wrongSeason := 1
+	enhancer := &recognitionStub{result: func(req recognition.BatchRequest) recognition.BatchResult {
+		return recognition.BatchResult{Items: []recognition.WorkResult{{
+			WorkID: req.Works[0].WorkID, Recognized: true, Title: "绝望主妇", Year: &year, MediaType: "tv", Season: &wrongSeason,
+		}}}
+	}}
+	tmdb := &mockTMDB{searchFn: func(query string, _ *int) []map[string]any {
+		if strings.TrimSpace(query) == "绝望主妇" {
+			return []map[string]any{{"id": 1408, "name": "绝望主妇", "first_air_date": "2004-10-03"}}
+		}
+		return nil
+	}}
+	p := newTestPlanner(fs, tmdb, "root")
+	p.SetRecognitionEnhancer(enhancer)
+	plan, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range plan.Actions {
+		if action.SourceID == "ep817" {
+			if !strings.Contains(action.TargetName, "S08E17") {
+				t.Fatalf("AI 不得将文件名明确的 S08E17 覆盖为其他季: %+v", action)
+			}
+			return
+		}
+	}
+	t.Fatalf("未生成目标文件的整理动作: actions=%+v skipped=%+v", plan.Actions, plan.Skipped)
+}
+
 func TestPlannerOnlyAsksAIForUnparsedEpisodes(t *testing.T) {
 	fs := &mockFS{dirs: map[string][]domain.FileItem{
 		"root": {{ID: "show", Name: "混乱剧名合集", IsDir: true}},

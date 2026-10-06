@@ -48,11 +48,15 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 		m.failTask(taskID, err.Error())
 		return false
 	}
-	existingDownloaded := int64(0)
-	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
-		existingDownloaded = info.Size()
+	existingDownloaded, err := crossTransferResumeOffset(localPath)
+	if err != nil {
+		m.failTask(taskID, err.Error())
+		return false
 	}
 	if totalBytes > 0 && existingDownloaded > totalBytes {
+		existingDownloaded = 0
+	}
+	if totalBytes <= 0 {
 		existingDownloaded = 0
 	}
 
@@ -99,6 +103,7 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 		existingDownloaded = 0
 	}
 	if totalBytes > 0 && existingDownloaded == totalBytes {
+		_ = os.Remove(localPath + ".download")
 		return m.finishCrossTransferDownloadSuccess(ctx, taskID, totalBytes, totalBytes)
 	}
 	resumed := totalBytes > 0 && existingDownloaded > 0
@@ -114,6 +119,10 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 	}()
 
 	if resumed {
+		if err := file.Truncate(existingDownloaded); err != nil {
+			m.finishCrossTransferDownloadError(ctx, taskID, err.Error())
+			return false
+		}
 		if _, err := file.Seek(existingDownloaded, io.SeekStart); err != nil {
 			m.finishCrossTransferDownloadError(ctx, taskID, err.Error())
 			return false
@@ -121,6 +130,7 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 	}
 
 	downloaded := existingDownloaded
+	prefix := existingDownloaded
 	sessionDownloaded := int64(0)
 	speed := speedsmoother.NewDefault()
 	lastEmit := time.Now()
@@ -139,10 +149,27 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 		lastEmit = now
 	}}
 	if totalBytes > 0 {
-		err = m.playback.CopyOriginalRange(ctx, progress, sourceAccountID, sourceFileID, res, existingDownloaded, totalBytes-1)
+		if err = saveCrossTransferCheckpoint(file, prefix); err == nil {
+			checkpoint := newTransferCheckpoint(file, prefix)
+			prefix, err = m.playback.DownloadOriginal(ctx, file, sourceAccountID, sourceFileID, res, existingDownloaded, totalBytes-1, func(n, contiguous int64) error {
+				progress.onWrite(n)
+				checkpoint.update(contiguous)
+				return nil
+			})
+			checkpoint.stop()
+		}
+		// 所有 worker 已退出，再截断乱序尾部；暂停与失败恢复均只使用连续前缀。
+		if truncateErr := file.Truncate(prefix); truncateErr != nil {
+			err = truncateErr
+		} else if checkpointErr := saveCrossTransferCheckpoint(file, prefix); checkpointErr != nil {
+			err = checkpointErr
+		}
 	} else {
 		err = m.playback.CopyOriginalFull(ctx, progress, sourceAccountID, sourceFileID, res)
-		totalBytes = downloaded
+		if err == nil {
+			totalBytes = downloaded
+		}
+		prefix = downloaded
 	}
 	if err != nil && errors.Is(err, playback.ErrInvalidRangeResponse) {
 		if closeErr := file.Close(); closeErr != nil {
@@ -160,9 +187,17 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 		speed.Reset()
 		lastEmit = time.Now()
 		progress.writer = file
-		err = m.playback.CopyOriginalFull(ctx, progress, sourceAccountID, sourceFileID, res)
+		if err = saveCrossTransferCheckpoint(file, 0); err == nil {
+			err = m.playback.CopyOriginalFull(ctx, progress, sourceAccountID, sourceFileID, res)
+		}
+		prefix = downloaded
+		if checkpointErr := saveCrossTransferCheckpoint(file, downloaded); checkpointErr != nil {
+			err = checkpointErr
+		}
 	}
 	if err != nil {
+		// 实际保留的连续断点可能小于乱序写入累计量。
+		m.updateDownloadProgress(taskID, prefix, totalBytes, "源盘下载已停止", 0)
 		m.finishCrossTransferDownloadError(ctx, taskID, translateError(err.Error()))
 		return false
 	}
@@ -186,6 +221,7 @@ func (m *Manager) executeCrossTransferDownload(ctx context.Context, taskID strin
 		return false
 	}
 	file = nil
+	_ = os.Remove(localPath + ".download")
 	return m.finishCrossTransferDownloadSuccess(ctx, taskID, downloaded, totalBytes)
 }
 
@@ -372,9 +408,6 @@ func shouldResetResumeState(errMsg string) bool {
 const downloadPersistInterval = 2 * time.Second
 
 func (m *Manager) updateDownloadProgress(taskID string, downloaded, total int64, message string, speed float64) {
-	if total <= 0 {
-		total = 1
-	}
 	progress := calcProgress(downloaded, total)
 	now := time.Now()
 	var snap *taskState
@@ -397,7 +430,7 @@ func (m *Manager) updateDownloadProgress(taskID string, downloaded, total int64,
 	st.Message = message
 	st.Error = ""
 	st.UpdatedAt = timeutil.UnixFloat(now)
-	if st.lastEmit.IsZero() || now.Sub(st.lastEmit) >= downloadPersistInterval || downloaded >= total {
+	if st.lastEmit.IsZero() || now.Sub(st.lastEmit) >= downloadPersistInterval || (total > 0 && downloaded >= total) {
 		st.lastEmit = now
 		snap = st
 	}

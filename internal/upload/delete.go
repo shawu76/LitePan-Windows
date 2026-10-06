@@ -267,6 +267,10 @@ func (m *Manager) cleanupLocalSourceAfterDelete(st *taskState) {
 	if st == nil || st.SourceType == SourceTypeServerLocal {
 		return
 	}
+	if st.SourceType == SourceTypeCrossTransfer {
+		m.removeLocalFile(st.localPath + ".download")
+		m.removeLocalFile(st.localPath + ".download.tmp")
+	}
 	if st.CleanupLocalMode != "" {
 		m.cleanupLocalSource(st.localPath, st.CleanupLocalPath, st.CleanupLocalMode)
 		return

@@ -35,3 +35,9 @@ type Enhancer interface {
 	Available() bool
 	Classify(ctx context.Context, req Request) (Decision, error)
 }
+
+// RootDirectoryProvider 提供当前分类模板可能产生的一级目录。
+// 调用方只关心落点范围，不需要理解分类规则。
+type RootDirectoryProvider interface {
+	RootDirectories(mediaType string) []string
+}

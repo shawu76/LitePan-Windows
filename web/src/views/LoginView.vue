@@ -16,7 +16,10 @@ const showPassword = ref(false);
 const isTyping = ref(false);
 const passwordFocused = ref(false);
 const passwordValue = ref("");
-const errors = reactive({ username: "", password: "" });
+const twoFactorChallenge = ref("");
+const verificationCode = ref("");
+const errors = reactive({ username: "", password: "", code: "" });
+const needsTwoFactor = computed(() => Boolean(twoFactorChallenge.value));
 
 const loginData = reactive({
   username: "",
@@ -34,6 +37,10 @@ watch(
 );
 
 function validate(): boolean {
+  if (needsTwoFactor.value) {
+    errors.code = verificationCode.value.trim() ? "" : "请输入动态验证码或恢复码";
+    return !errors.code;
+  }
   errors.username = loginData.username.trim() ? "" : "请输入用户名";
   errors.password = loginData.password ? "" : "请输入密码";
   return !errors.username && !errors.password;
@@ -47,11 +54,19 @@ async function handleLogin() {
   if (loading.value || !validate()) return;
   loading.value = true;
   try {
-    const result = await login({
-      username: loginData.username.trim(),
-      password: loginData.password,
-      remember: loginData.remember,
-    });
+    const result = needsTwoFactor.value
+      ? await login({ challenge: twoFactorChallenge.value, code: verificationCode.value.trim() })
+      : await login({
+          username: loginData.username.trim(),
+          password: loginData.password,
+          remember: loginData.remember,
+        });
+    if (result.two_factor_required && result.challenge) {
+      twoFactorChallenge.value = result.challenge;
+      verificationCode.value = "";
+      toast.info("账号密码已通过，请完成两步验证");
+      return;
+    }
     await auth.applyLogin(result);
     toast.success("登录成功");
     await router.push(typeof route.query.redirect === "string" ? route.query.redirect : "/admin");
@@ -60,6 +75,12 @@ async function handleLogin() {
   } finally {
     loading.value = false;
   }
+}
+
+function backToPassword() {
+  twoFactorChallenge.value = "";
+  verificationCode.value = "";
+  errors.code = "";
 }
 
 function formatCountdown(seconds: number): string {
@@ -152,11 +173,14 @@ onMounted(async () => {
         <div class="mobile-logo"><span>LitePan 控制台</span></div>
 
         <div class="form-header">
-          <h1 class="form-title">欢迎回来</h1>
-          <p class="form-subtitle">轻量级多网盘聚合管理系统</p>
+          <h1 class="form-title">{{ needsTwoFactor ? "两步验证" : "欢迎回来" }}</h1>
+          <p class="form-subtitle">
+            {{ needsTwoFactor ? "请输入验证器生成的 6 位动态码，或使用恢复码" : "轻量级多网盘聚合管理系统" }}
+          </p>
         </div>
 
         <form class="login-form" @submit.prevent="handleLogin">
+          <template v-if="!needsTwoFactor">
           <div class="field-label">用户名</div>
           <div class="field-block">
             <input
@@ -225,9 +249,28 @@ onMounted(async () => {
             </label>
             <a href="#" class="forgot-link" @click.prevent="handleForgotPassword">忘记密码？</a>
           </div>
+          </template>
+
+          <template v-else>
+            <div class="field-label">验证码</div>
+            <div class="field-block">
+              <input
+                v-model="verificationCode"
+                class="login-input verification-input"
+                placeholder="6 位动态码 / 恢复码"
+                autocomplete="one-time-code"
+                inputmode="numeric"
+                autofocus
+              />
+              <p v-if="errors.code" class="field-error">{{ errors.code }}</p>
+            </div>
+          </template>
 
           <button type="submit" class="submit-btn" :disabled="loading">
-            {{ loading ? "登录中..." : "登录" }}
+            {{ loading ? "验证中..." : needsTwoFactor ? "验证并登录" : "登录" }}
+          </button>
+          <button v-if="needsTwoFactor" type="button" class="back-btn" @click="backToPassword">
+            返回账号密码登录
           </button>
         </form>
 
@@ -450,6 +493,13 @@ onMounted(async () => {
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
 }
 
+.verification-input {
+  text-align: center;
+  letter-spacing: 0.16em;
+  font-size: 17px;
+  font-weight: 600;
+}
+
 .input-password-wrapper .login-input {
   padding-right: 44px;
 }
@@ -522,6 +572,20 @@ onMounted(async () => {
 .submit-btn:disabled {
   opacity: 0.72;
   cursor: not-allowed;
+}
+
+.back-btn {
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.back-btn:hover {
+  color: #1e40af;
 }
 
 .footer-hint {

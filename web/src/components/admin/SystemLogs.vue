@@ -23,7 +23,7 @@ import AppSelect from "@/components/base/AppSelect.vue";
 import AppStateBlock from "@/components/base/AppStateBlock.vue";
 import SvgIcon from "@/components/icons/SvgIcon.vue";
 import { confirm } from "@/composables/useConfirm";
-import { toast } from "@/composables/useToast";
+import { copyTextToClipboard, toast } from "@/composables/useToast";
 import { formatTime, formatTimeShort } from "@/utils/format";
 
 const props = withDefaults(
@@ -286,6 +286,22 @@ function formatDetails(details: Record<string, unknown>) {
   return JSON.stringify(details, null, 2);
 }
 
+async function copyLog(log: LogEntry) {
+  const entry: Record<string, unknown> = {
+    timestamp: log.timestamp,
+    level: log.level,
+    module: log.module,
+    message: log.message,
+  };
+  if (log.account_id) entry.account_id = log.account_id;
+  if (log.driver_name) entry.driver_name = log.driver_name;
+  if (hasDetails(log)) entry.details = log.details;
+  await copyTextToClipboard(JSON.stringify(entry), {
+    successMessage: "日志已复制",
+    errorMessage: "复制失败，请手动选择日志",
+  });
+}
+
 const moduleOptions = LOG_MODULE_GROUPS.map((o) => ({ value: o.value, label: o.label }));
 const periodOptions = LOG_PERIODS.map((o) => ({ value: o.value, label: o.label }));
 
@@ -451,7 +467,10 @@ onUnmounted(() => clearTimeout(searchTimer));
               <span class="log-row__chevron"><SvgIcon name="hand-chevron-down" :size="14" /></span>
 
               <div v-if="expanded.has(log.id)" class="log-row__detail" @click.stop>
-                <p class="log-row__full">{{ log.message }}</p>
+                <div class="log-row__detail-head">
+                  <p class="log-row__full">{{ log.message }}</p>
+                  <button type="button" class="log-row__copy" @click="copyLog(log)">复制日志</button>
+                </div>
                 <div v-if="log.driver_name || log.account_id" class="log-row__chips">
                   <span v-if="log.driver_name" class="log-meta-chip">驱动 {{ log.driver_name }}</span>
                   <span v-if="log.account_id" class="log-meta-chip">账号 {{ log.account_id }}</span>

@@ -7,6 +7,7 @@ const NotificationCategoryStrmScanWarn = "strm_scan_warn"
 const NotificationCategoryStrmScrapeWarn = "strm_scrape_warn"
 const NotificationCategoryFuseMountWarn = "fuse_mount_warn"
 const NotificationCategoryQuarkTVWarn = "quarktv_warn"
+const NotificationCategoryStrmDeleteConfirm = "strm_delete_confirm"
 
 type Notification struct {
 	ID        int64

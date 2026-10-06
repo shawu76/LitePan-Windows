@@ -25,6 +25,9 @@ func (d *Driver) GetAccountProfile(ctx context.Context) (*domain.AccountProfile,
 	if err := d.apiCall(ctx, http.MethodGet, pathUserInfo, nil, nil, &v); err != nil {
 		return nil, err
 	}
+	d.mu.Lock()
+	d.uid = strconv.FormatInt(v.UID, 10)
+	d.mu.Unlock()
 	p := &domain.AccountProfile{UserID: strconv.FormatInt(v.UID, 10), Nickname: v.Nickname, UsedBytes: v.SpaceUsed, TotalBytes: v.SpacePermanent + v.SpaceTemp}
 	now := time.Now()
 	highestLevel := -1

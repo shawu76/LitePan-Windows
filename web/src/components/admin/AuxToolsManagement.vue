@@ -26,6 +26,7 @@ const tabs = [
 
 const settingsDrawerOpen = ref(false);
 const enhancedSearchOpen = ref(false);
+const cloudToolsRef = ref<{ clearSearch: () => void } | null>(null);
 const scrapeSettingsVisited = ref(false);
 const scrapePanelRef = ref<InstanceType<typeof StrmScrapePanelComponent> | null>(null);
 const scrapeSettingsRef = ref<SettingsPanelExpose | null>(null);
@@ -60,12 +61,16 @@ const { activeTab, setActiveTab } = useSectionTabRoute(
 );
 
 // 重面板首次访问时才挂载，之后只隐藏不销毁，保留已加载状态。
+// 但增强工具的搜索筛选不能跟着留下来：离开这个标签页就清掉，回来看到的是全部卡片。
 const tabsVisited = reactive<Record<string, boolean>>({});
 watch(
   activeTab,
   (tab) => {
     tabsVisited[tab] = true;
-    if (tab !== ENHANCED_TAB) enhancedSearchOpen.value = false;
+    if (tab !== ENHANCED_TAB) {
+      enhancedSearchOpen.value = false;
+      cloudToolsRef.value?.clearSearch();
+    }
   },
   { immediate: true },
 );
@@ -91,6 +96,7 @@ async function closeSettingsDrawer() {
 
 onDeactivated(() => {
   enhancedSearchOpen.value = false;
+  cloudToolsRef.value?.clearSearch();
   if (!settingsDrawerOpen.value) return;
   if (scrapePanelDirty.value) revertDrawerSettings();
   settingsDrawerOpen.value = false;
@@ -133,6 +139,7 @@ async function handleDrawerSave() {
     <CloudToolsPanel
       v-if="tabsVisited[ENHANCED_TAB]"
       v-show="isEnhancedTab"
+      ref="cloudToolsRef"
       :search-open="enhancedSearchOpen"
       @update:search-open="enhancedSearchOpen = $event"
     />

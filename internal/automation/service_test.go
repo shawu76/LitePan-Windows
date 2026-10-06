@@ -15,6 +15,7 @@ import (
 	"litepan/internal/domain"
 	filesvc "litepan/internal/file"
 	"litepan/internal/mediaorganize"
+	"litepan/internal/mediaorganize/classification"
 	"litepan/internal/settings"
 	"litepan/internal/strm"
 	"litepan/internal/strmscrape"
@@ -524,6 +525,59 @@ func TestValidateRuleChecksEveryOrganizeStrmCombination(t *testing.T) {
 	if len(result.Issues) == 0 || !strings.Contains(result.Issues[0].Message, "第 2 个整理动作") {
 		t.Fatalf("期望识别第二个整理动作不兼容，实际 issues=%#v", result.Issues)
 	}
+}
+
+func TestValidateRuleAcceptsClassifiedOrganizeTarget(t *testing.T) {
+	t.Parallel()
+
+	organizeSvc := mediaorganize.NewService(mediaorganize.ServiceOptions{
+		Repo: newMediaOrganizeTaskRepo(&domain.MediaOrganizeTask{
+			ID:        "org-tv",
+			TaskName:  "影视整理",
+			AccountID: 1,
+			Config: mustJSON(map[string]any{
+				"target_root": "/影视",
+				"action_type": "move",
+				"media_type":  "tv",
+			}),
+		}),
+		Classification: classificationRootStub{"tv": {"电视剧"}},
+	})
+	strmSvc := strm.NewService(strm.ServiceOptions{
+		Repo: newStrmTaskRepo(&domain.StrmTask{
+			ID:           10,
+			Name:         "电视剧 STRM",
+			AccountID:    1,
+			Path:         "/影视/电视剧",
+			ScheduleMode: domain.StrmScheduleWindow,
+			Status:       domain.StrmStatusActive,
+		}),
+	})
+	service := New(Options{
+		Rules:    newAutomationRuleRepo(),
+		Runs:     &automationRunRepo{},
+		Organize: organizeSvc,
+		Strm:     strmSvc,
+	})
+
+	result, err := service.ValidateRule(context.Background(), []RuleAction{
+		{ID: "organize", Type: domain.AutomationActionOrganize, Params: map[string]any{"task_id": "org-tv"}},
+		{ID: "strm", Type: domain.AutomationActionStrm, Params: map[string]any{"task_id": 10}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateRule 返回错误: %v", err)
+	}
+	if !result.OK || len(result.Issues) != 0 {
+		t.Fatalf("分类实际落点已在 STRM 目录内，不应拦截: %#v", result)
+	}
+}
+
+type classificationRootStub map[string][]string
+
+var _ classification.RootDirectoryProvider = classificationRootStub{}
+
+func (s classificationRootStub) RootDirectories(mediaType string) []string {
+	return append([]string(nil), s[mediaType]...)
 }
 
 func TestCreateRuleRollsBackStrmScheduleModeWhenRuleCreateFails(t *testing.T) {

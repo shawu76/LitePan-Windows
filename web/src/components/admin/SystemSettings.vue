@@ -29,6 +29,7 @@ import SettingsRow from "@/components/admin/SettingsRow.vue";
 import SettingsHelpTooltip from "@/components/admin/SettingsHelpTooltip.vue";
 import ApiKeySettings from "@/components/admin/ApiKeySettings.vue";
 import SvgIcon from "@/components/icons/SvgIcon.vue";
+import TwoFactorSettings from "@/components/admin/TwoFactorSettings.vue";
 import { isCacheSettingKey } from "@/constants/cacheSettings";
 import { getSkinPref, previewSkin, restoreSavedSkin, setSkinPref, type SkinPref } from "@/utils/theme";
 
@@ -105,6 +106,7 @@ const original = reactive<Record<string, string>>({});
 
 const newPassword = ref("");
 const confirmPassword = ref("");
+const twoFactorEnabled = ref(false);
 const securityForm = reactive({
   admin_username: "admin",
   session_timeout: "2",
@@ -284,6 +286,7 @@ function applySystemConfig(config: {
   admin_home_return_mode?: string;
   header_effects_enabled?: boolean;
   index_strm_auto_detect_enabled?: boolean;
+  two_factor_enabled?: boolean;
 }) {
   securityForm.admin_username = config.admin_username || "admin";
   securityForm.session_timeout = String(config.session_timeout || 2);
@@ -291,6 +294,7 @@ function applySystemConfig(config: {
   securityOriginal.session_timeout = securityForm.session_timeout;
   securityForm.public_index_enabled = config.public_index_enabled ?? false;
   securityOriginal.public_index_enabled = securityForm.public_index_enabled;
+  twoFactorEnabled.value = config.two_factor_enabled ?? false;
   const mode = config.index_account_switch_mode === "floating" ? "floating" : "dropdown";
   homepageForm.index_account_switch_mode = mode;
   homepageOriginal.index_account_switch_mode = mode;
@@ -571,6 +575,17 @@ async function submit() {
         </SettingsRow>
       </SettingsCard>
 
+      <!-- 两步验证单独一张卡片，不和账号安全其它项挤在一起 -->
+      <SettingsCard v-if="isSecurityTab && !forcePasswordChange" title="两步验证" :accent="accentColor">
+        <template #head-aside>
+          <p class="two-factor-tip">登录时除密码外，还需要验证器生成的 6 位动态码；验证器不可用时可用恢复码登录。</p>
+        </template>
+        <TwoFactorSettings
+          :enabled="twoFactorEnabled"
+          @changed="twoFactorEnabled = $event"
+        />
+      </SettingsCard>
+
       <SettingsCard v-if="isHomepageTab" title="STRM" :accent="accentColor">
         <SettingsRow
           :show-changed-badge="true"
@@ -804,6 +819,18 @@ async function submit() {
 </template>
 
 <style scoped>
+/* 卡片标题旁的说明，和刮削设置里的做法一致 */
+.two-factor-tip {
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings {
   padding-bottom: 24px;
 }

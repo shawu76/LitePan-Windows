@@ -115,6 +115,19 @@ func (s *Service) IsTaskRunning(taskID int64) bool {
 	return s.isTaskRunning(taskID)
 }
 
+// IsTaskBusy 同时覆盖扫描和任务目录搬移，供外部目录监听忽略程序自身的文件变动。
+func (s *Service) IsTaskBusy(taskID int64) bool {
+	if s == nil || taskID <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	_, fileBusy := s.fileOperations[taskID]
+	running := s.running[taskID]
+	recentInternalChange := time.Now().Before(s.internalMutationUntil[taskID])
+	s.mu.Unlock()
+	return running || fileBusy || recentInternalChange
+}
+
 func (s *Service) TaskListMeta(taskID int64, dbStatus string) TaskListMeta {
 	s.mu.Lock()
 	running := s.running[taskID]
