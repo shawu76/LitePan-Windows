@@ -19,7 +19,8 @@ LitePan Windows 版是开源多网盘聚合挂载/管理工具 [LitePan](https:/
 - **单文件分发**：Go 后端 + Vue 3 前端构建产物通过 `go:embed` 内嵌为单一 exe，无需单独部署前端
 - **多网盘聚合**：聚合管理多个网盘存储，提供统一 Web 界面
 - **跨盘浏览**：修复原版 Linux 路径语义限制，支持枚举并浏览本地盘 / 可移动盘 / 光驱 / 网络映射盘 / 虚拟盘
-- **完整 Web / 存储 / API 功能**：在无 FUSE 内核的 Windows 上，除文件系统挂载外功能完整可用
+- **文件系统挂载（WinFsp）**：基于 WinFsp + cgofuse 实现盘符挂载，挂载盘可在资源管理器「此电脑」正常显示
+- **完整 Web / 存储 / API 功能**：与上游功能对齐，单 exe 内嵌前端与后端
 - **默认账号开箱即用**：默认管理员账号 `admin/admin`，首次登录后请立即修改密码
 
 ## 项目来源与许可
@@ -40,12 +41,16 @@ LitePan Windows 版是开源多网盘聚合挂载/管理工具 [LitePan](https:/
 - 前端构建产物输出到 `internal/api/web` 目录，通过 `go:embed` 内嵌进后端二进制
 - 最终产物为**单一 exe**，运行时无需额外部署前端静态文件，也无需外部 Web 服务器
 
-### FUSE 无内核处理
+### FUSE 与 WinFsp 挂载处理
 
 Windows 没有 FUSE 内核支持，无法直接使用 `go-fuse` 做文件系统挂载，本项目采用两条路径并存：
 
 1. **build-nofuse 构建路径**：项目自带 `build-nofuse` 目标（见 Makefile）。编译时不带 `fuse` tag，完全跳过 go-fuse 依赖，Web / 存储 / API 功能完整可用。这是 Windows 下的默认推荐构建方式
-2. **fuse tag 兼容路径**：为让带 fuse tag 的构建也能在 Windows 下编译通过：
+2. **WinFsp + cgofuse 挂载路径**（已实现）：引入 [cgofuse](https://github.com/winfsp/cgofuse) 的 WinFsp 后端，实现真实盘符挂载：
+   - 挂载通过 `internal/share/fuse/manager_winfsp.go` 的 `host.Mount` 异步执行，以 `Init()` 回调 + 超时兜底判定挂载成功
+   - 盘符根挂载点（如 `L:\`）经 `toWinfspMountPoint` 归一化为 `\\?\L:`，走内核 Mount Manager 全局注册，与进程是否管理员无关，挂载盘在资源管理器「此电脑」中正常可见
+   - 前端「挂载管理」提供挂载点选择弹窗（`MountPointPickerModal.vue`，列出 A-Z 全部盘符，已占用盘符禁用）
+3. **fuse tag 兼容路径**：为让带 fuse tag 的构建也能在 Windows 下编译通过：
    - 将 go-fuse 依赖复制到本地 `third_party/go-fuse` 目录
    - 通过 `go.mod` 的 `replace` 指令指向本地副本
    - 补充 `fallocate_windows.go` 等 Windows 占位实现，补齐平台缺失的系统调用
@@ -136,7 +141,7 @@ output\litepan.exe --listen=127.0.0.1:5211 --data-dir=<数据目录>
 
 ## 已知限制
 
-- **无 FUSE 盘符挂载**：Windows 版不做 FUSE 文件系统挂载；如需该能力，未来可引入 WinFsp + cgofuse 替换 go-fuse
+- **挂载需安装 WinFsp**：文件系统挂载依赖 [WinFsp](https://winfsp.dev/) 运行时，使用挂载功能前需先安装
 - **开机自启需自行注册**：Windows 版不提供自启安装，可用 NSSM / WinSW 注册为 Windows 服务
 - **rtf.js 临时补丁**：Vite 8（rolldown）对 rtf.js 源码 `export { X, IType }` 类型混导报 `MISSING_EXPORT`，需在 `node_modules` 中修改 `wmfjs/index.ts`、`emfjs/index.ts`、`rtfjs/index.ts` 三处为 `export type { IType }`。该补丁是 `node_modules` 内的**临时修改**，重新 `npm ci` 后需重新应用（建议贡献给上游或改用 patch-package 管理）
 - **UNC 路径限制**：数据目录选择器仅支持有盘符的存储；未映射盘符的 UNC 网络路径（`\\server\share`）需先在系统中映射为盘符
@@ -172,9 +177,9 @@ A：支持所有带盘符的本地与映射存储，包括本地硬盘、可移�
 
 A：数据目录选择器**仅支持有盘符的存储**。未映射盘符的 UNC 网络路径需先在系统中通过 `net use` 或资源管理器映射成盘符后再使用。
 
-**Q3：为什么没有 FUSE 挂载功能？**
+**Q3：支持文件系统挂载吗？**
 
-A：Windows 无 FUSE 内核，原版基于 go-fuse 的挂载能力无法工作。本项目默认走 `build-nofuse` 路径，跳过挂载能力但保证 Web / 存储 / API 功能完整；未来可通过 WinFsp + cgofuse 实现 Windows 原生挂载。
+A：支持。本项目已基于 WinFsp + cgofuse 实现盘符挂载（如将存储挂载为 `Z:`），挂载盘在资源管理器「此电脑」中可见。使用前需先安装 [WinFsp](https://winfsp.dev/)，并在「系统设置 → 挂载管理」中选择挂载点；盘符根挂载点经 `\\?\X:` 走 Mount Manager 全局注册，不依赖管理员权限。默认 `build-nofuse` 构建仍跳过挂载能力，需使用附带 cgofuse 的完整构建（如 `output/litepan.exe`）。
 
 **Q4：重新 `npm ci` 后前端构建报 `MISSING_EXPORT` 怎么办？**
 

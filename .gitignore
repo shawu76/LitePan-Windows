@@ -40,3 +40,4 @@ drivers/115/
 /.smoke*/
 /output/data/
 *.exe~
+/output/litepan_winfspA.exe

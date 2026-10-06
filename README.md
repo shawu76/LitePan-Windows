@@ -6,6 +6,8 @@
 
 无需 Docker、无需 WSL、无需虚拟机，单个 exe 即可运行。
 
+**当前版本：`v0.5.7-Beta`**（对齐上游 LitePan v0.5.7，Windows 原生移植版）
+
 </div>
 
 ---
@@ -30,10 +32,11 @@
 - **单文件分发**：Go 后端 + Vue 3 前端构建产物通过 `go:embed` 内嵌为单一 exe
 - **多网盘聚合**：多账号统一管理，一个界面看完（秒传、STRM 直连播放、刮削、整理、离线下载等）
 - **跨盘浏览**：修复原版 Linux 路径语义限制，支持枚举并浏览本地盘 / 可移动盘 / 光驱 / 网络映射盘 / 虚拟盘
-- **完整 Web / 存储 / API 功能**：在无 FUSE 内核的 Windows 上，除文件系统挂载外功能完整可用
+- **文件系统挂载（WinFsp）**：基于 WinFsp + cgofuse 实现盘符挂载，挂载盘在资源管理器「此电脑」正常显示
+- **完整 Web / 存储 / API 功能**：功能与上游一致，单 exe 内嵌前端与后端
 - **默认账号**：`admin/admin`，首次登录后请立即修改密码
 
-> Windows 没有 FUSE 内核支持，本版不含 FUSE 盘符挂载功能；其余功能与上游一致。
+> Windows 没有 FUSE 内核，本版通过 WinFsp + cgofuse 实现盘符挂载（使用前请先安装 [WinFsp](https://winfsp.dev/)）。
 
 ---
 
@@ -41,13 +44,15 @@
 
 ### 方式一：直接运行 exe（推荐）
 
-仓库 `output/` 目录已附带编译好的 `litepan.exe`，下载后直接运行：
+仓库 `output/` 目录已附带编译好的 `litepan.exe`（Release 页亦可下载），下载后直接运行：
 
 ```powershell
 .\litepan.exe --listen=127.0.0.1:5211 --data-dir=.\data
 ```
 
 打开 <http://127.0.0.1:5211>，默认账号 `admin/admin`。
+
+如需文件系统挂载（将网盘挂载为盘符），请先安装 [WinFsp](https://winfsp.dev/)（最新版即可），然后在「系统设置 → 挂载管理」中配置挂载点（如 `Z:`）。
 
 ### 方式二：从源码编译
 
@@ -65,7 +70,7 @@
 | --- | --- | --- |
 | 运行环境 | Docker / Linux | Windows 原生 exe |
 | 部署方式 | Docker Compose | 单文件运行 |
-| 文件系统挂载 | FUSE（Linux） | 不支持（无 FUSE 内核） |
+| 文件系统挂载 | FUSE（Linux） | WinFsp + cgofuse（Windows） |
 | 本地目录浏览 | 仅 Linux 路径语义 | 支持全盘符枚举与跨盘浏览 |
 | 前端形态 | Docker 内嵌 Web | go:embed 单 exe |
 
